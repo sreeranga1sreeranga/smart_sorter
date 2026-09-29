@@ -1,0 +1,10 @@
+.env
+__pycache__/
+venv/
+
+venv/
+UNKNOWN/
+INVOICE/
+RESUME/
+CONTRACT/
+check_models.py
