@@ -1,15 +1,14 @@
-# SQLite databases and WAL caches (should never be committed)
+# Databases & SQLite WAL
 *.db
 *.db-shm
 *.db-wal
 
-# User-uploaded files
+# Storage & environments
 organized_files/
-
-# Python & Node dependencies
 venv/
 __pycache__/
 *.pyc
 frontend/node_modules/
 frontend/dist/
+startup.txt
 .DS_Store
