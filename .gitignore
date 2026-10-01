@@ -1,12 +1,15 @@
-.env
-__pycache__/
-venv/
+# SQLite databases and WAL caches (should never be committed)
+*.db
+*.db-shm
+*.db-wal
 
-venv/
-UNKNOWN/
-INVOICE/
-RESUME/
-CONTRACT/
-.DS_Store
+# User-uploaded files
 organized_files/
-*.pdf
+
+# Python & Node dependencies
+venv/
+__pycache__/
+*.pyc
+frontend/node_modules/
+frontend/dist/
+.DS_Store
