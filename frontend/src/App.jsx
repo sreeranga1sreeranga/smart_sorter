@@ -324,7 +324,15 @@ export default function App() {
 
   const handleUploadSubmit = async (e) => {
     e.preventDefault();
-    if (!selectedFiles.length) return;
+    if (!selectedFiles.length) {
+      alert("Please select at least one file first.");
+      return;
+    }
+
+    if (!currentUser || !currentUser.id) {
+      alert("Session expired or invalid user ID. Please sign out and sign in again.");
+      return;
+    }
 
     setIsUploading(true);
     const formData = new FormData();
@@ -334,7 +342,7 @@ export default function App() {
     }
 
     try {
-      await axios.post(`${API_BASE}/documents/upload`, formData, {
+      const res = await axios.post(`${API_BASE}/documents/upload`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       setSelectedFiles([]);
@@ -342,6 +350,8 @@ export default function App() {
       await fetchWorkspace();
     } catch (err) {
       console.error("Upload failed:", err);
+      const detail = err.response?.data?.detail || err.message || "Upload request failed";
+      alert("Upload Error: " + (typeof detail === "object" ? JSON.stringify(detail) : detail));
     } finally {
       setIsUploading(false);
     }
