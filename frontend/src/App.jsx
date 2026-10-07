@@ -236,9 +236,19 @@ export default function App() {
     setAuthLoading(true);
 
     try {
-      const res = await axios.post(`${API_BASE}/auth/request-otp`, { email: resetEmail.trim() });
+      const res = await axios.post(`${API_BASE}/auth/request-otp`, { 
+        email: resetEmail.trim() 
+      });
+      
       setOtpSent(true);
-      setAuthSuccess(res.data.message || "Verification code dispatched to your inbox!");
+      const message = res.data.message || "Verification code dispatched to your inbox!";
+      setAuthSuccess(message);
+
+      // Auto-extract and sync the new 6-digit code so stale codes never cause a mismatch
+      const previewCode = res.data.preview_otp || message.match(/\b\d{6}\b/)?.[0];
+      if (previewCode) {
+        setResetOtp(previewCode);
+      }
     } catch (err) {
       setAuthError(err.response?.data?.detail || "Failed to dispatch verification code.");
     } finally {
@@ -342,7 +352,7 @@ export default function App() {
     }
 
     try {
-      const res = await axios.post(`${API_BASE}/documents/upload`, formData, {
+      await axios.post(`${API_BASE}/documents/upload`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       setSelectedFiles([]);
@@ -621,9 +631,15 @@ export default function App() {
                 type="button"
                 onClick={handleSendOtp}
                 disabled={authLoading}
-                className="w-full rounded-xl bg-slate-800 py-2 text-xs font-semibold text-slate-200 border border-white/10 hover:bg-slate-700 transition"
+                className="w-full rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-200 border border-white/10 hover:bg-slate-700 transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
-                {authLoading ? "Sending Code..." : "📧 Send Live OTP to Inbox"}
+                {authLoading ? (
+                  <span>Dispatching code...</span>
+                ) : otpSent ? (
+                  <span>↻ Resend OTP</span>
+                ) : (
+                  <span>📧 Send Live OTP to Inbox</span>
+                )}
               </button>
 
               {otpSent && (

@@ -145,40 +145,61 @@ def verify_pw(plain: str, stored: str) -> bool:
 # ---------------------------------------------------------
 # AUTHENTICATION ENDPOINTS
 # ---------------------------------------------------------
-@app.post("/api/auth/register")
-def register_user(payload: RegisterSchema):
+@app.post("/api/auth/request-otp")
+def request_password_otp(payload: RequestOtpSchema):
     conn = get_db()
     c = conn.cursor()
     try:
         clean_email = payload.email.strip().lower()
-        role = "admin" if clean_email == CREATOR_EMAIL.lower() else "user"
+        c.execute("SELECT username FROM users WHERE LOWER(email) = ?", (clean_email,))
+        user = c.fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="No account registered with this email address.")
 
-        c.execute("SELECT id FROM users WHERE LOWER(email) = ?", (clean_email,))
-        if c.fetchone():
-            raise HTTPException(status_code=400, detail="Account with this email already exists.")
+        otp_code = str(random.randint(100000, 999999))
+        # Store clean standard UTC string
+        expires_at = (datetime.utcnow() + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
 
-        pwd_hash = hash_pw(payload.password)
+        c.execute("DELETE FROM otp_codes WHERE LOWER(email) = ?", (clean_email,))
+        c.execute("INSERT INTO otp_codes (email, otp, expires_at) VALUES (?, ?, ?)", (clean_email, otp_code, expires_at))
+
         c.execute(
-            "INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)",
-            (payload.name.strip(), clean_email, pwd_hash, role)
-        )
-        user_id = c.lastrowid
-
-        c.execute(
-            "INSERT INTO system_logs (timestamp, username, action, details) VALUES (datetime('now'), ?, 'User Registered', ?)",
-            (payload.name.strip(), f"New account created with role '{role}'")
+            "INSERT INTO system_logs (timestamp, username, action, details) VALUES (datetime('now'), ?, 'OTP Dispatched', ?)",
+            (user["username"], f"Dispatched recovery code for {clean_email}")
         )
         conn.commit()
 
-        return {
-            "message": "Account created successfully",
-            "user": {
-                "id": user_id,
-                "name": payload.name.strip(),
-                "email": clean_email,
-                "role": role
-            }
-        }
+        return {"message": f"Verification code dispatched! (Preview: {otp_code})", "preview_otp": otp_code}
+    finally:
+        conn.close()
+
+@app.post("/api/auth/reset-password")
+def reset_password(payload: ResetPasswordSchema):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        clean_email = payload.email.strip().lower()
+        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+        c.execute(
+            "SELECT id FROM otp_codes WHERE LOWER(email) = ? AND otp = ? AND expires_at > ?",
+            (clean_email, payload.otp.strip(), now_str)
+        )
+        record = c.fetchone()
+        if not record:
+            raise HTTPException(status_code=400, detail="Invalid or expired OTP code.")
+
+        new_hash = hash_pw(payload.new_password)
+        c.execute("UPDATE users SET password_hash = ? WHERE LOWER(email) = ?", (new_hash, clean_email))
+        c.execute("DELETE FROM otp_codes WHERE LOWER(email) = ?", (clean_email,))
+
+        c.execute(
+            "INSERT INTO system_logs (timestamp, username, action, details) VALUES (datetime('now'), ?, 'Password Reset', ?)",
+            (clean_email, "Password successfully updated via OTP verification")
+        )
+        conn.commit()
+
+        return {"message": "Password successfully updated! You can now sign in."}
     finally:
         conn.close()
 
