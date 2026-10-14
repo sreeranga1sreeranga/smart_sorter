@@ -90,8 +90,24 @@ export default function App() {
   const [resetEmail, setResetEmail] = useState("");
   const [resetOtp, setResetOtp] = useState("");
   const [resetNewPass, setResetNewPass] = useState("");
-  const [otpSent, setOtpSent] = useState(false);
+  const [resetConfirmPass, setResetConfirmPass] = useState("");
+  const [resetStep, setResetStep] = useState(1); // 1: Email, 2: Verify OTP, 3: Set New Password
+  const [otpTimer, setOtpTimer] = useState(0);   // 180 seconds (3 minutes)
 
+  // 3-Minute Countdown Timer Effect
+  useEffect(() => {
+    if (portalMode !== "reset" || resetStep !== 2 || otpTimer <= 0) return;
+    const timerId = setInterval(() => {
+      setOtpTimer((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timerId);
+  }, [portalMode, resetStep, otpTimer]);
+
+  const formatCountdown = (secs) => {
+    const mins = String(Math.floor(secs / 60)).padStart(2, "0");
+    const remSecs = String(secs % 60).padStart(2, "0");
+    return `${mins}:${remSecs}`;
+  };
   // Workspace
   const [activeTab, setActiveTab] = useState("library"); // 'library' | 'drive' | 'audit' | 'admin'
   const [summary, setSummary] = useState({
@@ -226,9 +242,10 @@ export default function App() {
     }
   };
 
-  const handleSendOtp = async () => {
+  const handleSendOtp = async (e) => {
+    if (e) e.preventDefault();
     if (!resetEmail.trim()) {
-      setAuthError("Please enter your mail ID.");
+      setAuthError("Please enter your registered email address.");
       return;
     }
     setAuthError("");
@@ -236,21 +253,43 @@ export default function App() {
     setAuthLoading(true);
 
     try {
-      const res = await axios.post(`${API_BASE}/auth/request-otp`, { 
-        email: resetEmail.trim() 
+      const res = await axios.post(`${API_BASE}/auth/request-otp`, {
+        email: resetEmail.trim(),
       });
-      
-      setOtpSent(true);
-      const message = res.data.message || "Verification code dispatched to your inbox!";
-      setAuthSuccess(message);
-
-      // Auto-extract and sync the new 6-digit code so stale codes never cause a mismatch
-      const previewCode = res.data.preview_otp || message.match(/\b\d{6}\b/)?.[0];
-      if (previewCode) {
-        setResetOtp(previewCode);
-      }
+      setResetOtp(""); // Always keep OTP box empty so user types it manually
+      setResetStep(2);
+      setOtpTimer(180); // Start 3-minute (180s) countdown
+      setAuthSuccess(res.data.message || "OTP sent to your registered email!");
     } catch (err) {
-      setAuthError(err.response?.data?.detail || "Failed to dispatch verification code.");
+      setAuthError(err.response?.data?.detail || "Failed to send verification code.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async (e) => {
+    e.preventDefault();
+    if (otpTimer <= 0) {
+      setAuthError("Time expired! Please click Resend OTP to receive a new code.");
+      return;
+    }
+    if (resetOtp.trim().length !== 6) {
+      setAuthError("Please enter the complete 6-digit OTP sent to your email.");
+      return;
+    }
+    setAuthError("");
+    setAuthSuccess("");
+    setAuthLoading(true);
+
+    try {
+      const res = await axios.post(`${API_BASE}/auth/verify-otp`, {
+        email: resetEmail.trim(),
+        otp: resetOtp.trim(),
+      });
+      setResetStep(3); // Unlock the New Password page!
+      setAuthSuccess(res.data.message || "OTP verified! Please enter your new password.");
+    } catch (err) {
+      setAuthError(err.response?.data?.detail || "Invalid OTP code. Please try again.");
     } finally {
       setAuthLoading(false);
     }
@@ -258,6 +297,14 @@ export default function App() {
 
   const handleResetPassword = async (e) => {
     e.preventDefault();
+    if (resetNewPass.length < 4) {
+      setAuthError("Password must be at least 4 characters long.");
+      return;
+    }
+    if (resetNewPass !== resetConfirmPass) {
+      setAuthError("Passwords do not match.");
+      return;
+    }
     setAuthError("");
     setAuthSuccess("");
     setAuthLoading(true);
@@ -268,15 +315,18 @@ export default function App() {
         otp: resetOtp.trim(),
         new_password: resetNewPass,
       });
-      setAuthSuccess("Password successfully changed! Redirecting to sign in...");
+      setAuthSuccess("Password updated successfully! Redirecting to Sign In...");
       setTimeout(() => {
         setPortalMode("user");
         setLoginEmail(resetEmail.trim());
+        setResetStep(1);
+        setResetOtp("");
+        setResetNewPass("");
+        setResetConfirmPass("");
         setAuthSuccess("");
-        setOtpSent(false);
       }, 1400);
     } catch (err) {
-      setAuthError(err.response?.data?.detail || "Invalid or expired OTP code.");
+      setAuthError(err.response?.data?.detail || "Could not update password.");
     } finally {
       setAuthLoading(false);
     }
@@ -612,61 +662,119 @@ export default function App() {
 
           {portalMode === "reset" && (
             <div className="space-y-4">
-              <div>
-                <label className="text-xs font-semibold text-slate-300">Account Email</label>
-                <div className="relative mt-1">
-                  <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                  <input
-                    type="email"
-                    required
-                    value={resetEmail}
-                    onChange={(e) => setResetEmail(e.target.value)}
-                    placeholder="Enter your mail ID"
-                    className="w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleSendOtp}
-                disabled={authLoading}
-                className="w-full rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-200 border border-white/10 hover:bg-slate-700 transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-              >
-                {authLoading ? (
-                  <span>Dispatching code...</span>
-                ) : otpSent ? (
-                  <span>↻ Resend OTP</span>
-                ) : (
-                  <span>📧 Send Live OTP to Inbox</span>
-                )}
-              </button>
-
-              {otpSent && (
-                <form onSubmit={handleResetPassword} className="space-y-3 pt-3 border-t border-white/10">
+              {/* STEP 1: ENTER EMAIL */}
+              {resetStep === 1 && (
+                <form onSubmit={handleSendOtp} className="space-y-4">
                   <div>
-                    <label className="text-xs font-semibold text-slate-300">6-Digit Code</label>
+                    <label className="text-xs font-semibold text-slate-300">Registered Account Email</label>
+                    <div className="relative mt-1">
+                      <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                      <input
+                        type="email"
+                        required
+                        value={resetEmail}
+                        onChange={(e) => setResetEmail(e.target.value)}
+                        placeholder="Enter your registered mail ID"
+                        className="w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className="w-full rounded-xl bg-blue-600 py-2.5 text-xs font-semibold text-white shadow-lg shadow-blue-600/30 hover:bg-blue-500 transition disabled:opacity-50"
+                  >
+                    {authLoading ? "Sending OTP to Email..." : "📧 Send OTP to Email"}
+                  </button>
+                </form>
+              )}
+
+              {/* STEP 2: ENTER OTP WITHIN 3 MINUTES */}
+              {resetStep === 2 && (
+                <form onSubmit={handleVerifyOtp} className="space-y-4">
+                  <div className="flex items-center justify-between rounded-xl bg-slate-900/90 border border-white/10 px-3.5 py-2 text-xs">
+                    <span className="text-slate-400 truncate max-w-[180px]">{resetEmail}</span>
+                    <button
+                      type="button"
+                      onClick={() => { setResetStep(1); setAuthError(""); setAuthSuccess(""); }}
+                      className="text-blue-400 hover:text-blue-300 font-medium text-[11px]"
+                    >
+                      Change Email
+                    </button>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-semibold text-slate-300">Enter 6-Digit OTP</label>
+                      <span className={`text-xs font-mono font-bold ${otpTimer > 30 ? "text-amber-400" : "text-red-400"}`}>
+                        {otpTimer > 0 ? `⏱ ${formatCountdown(otpTimer)}` : "⏱ Expired (00:00)"}
+                      </span>
+                    </div>
                     <input
                       type="text"
                       maxLength={6}
                       required
+                      disabled={otpTimer === 0}
                       value={resetOtp}
-                      onChange={(e) => setResetOtp(e.target.value)}
-                      placeholder="e.g. 583921"
-                      className="mt-1 w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 px-4 text-center tracking-widest text-lg font-bold text-white focus:border-blue-500 focus:outline-none"
+                      onChange={(e) => setResetOtp(e.target.value.replace(/\D/g, ""))}
+                      placeholder="• • • • • •"
+                      className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 px-4 text-center tracking-[0.5em] text-lg font-bold text-white focus:border-blue-500 focus:outline-none disabled:opacity-40"
                     />
                   </div>
 
+                  {otpTimer > 0 ? (
+                    <button
+                      type="submit"
+                      disabled={authLoading || resetOtp.length !== 6}
+                      className="w-full rounded-xl bg-blue-600 py-2.5 text-xs font-semibold text-white shadow-lg shadow-blue-600/30 transition hover:bg-blue-500 disabled:opacity-50"
+                    >
+                      {authLoading ? "Verifying OTP..." : "Verify OTP →"}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleSendOtp}
+                      disabled={authLoading}
+                      className="w-full rounded-xl bg-amber-500 py-2.5 text-xs font-bold text-slate-950 shadow-lg shadow-amber-500/20 transition hover:bg-amber-400"
+                    >
+                      {authLoading ? "Dispatching New Code..." : "↻ Resend OTP (3 Min Expired)"}
+                    </button>
+                  )}
+                </form>
+              )}
+
+              {/* STEP 3: UPDATE NEW PASSWORD (UNLOCKED ONLY AFTER OTP VERIFICATION) */}
+              {resetStep === 3 && (
+                <form onSubmit={handleResetPassword} className="space-y-4">
                   <div>
                     <label className="text-xs font-semibold text-slate-300">New Password</label>
-                    <input
-                      type="password"
-                      required
-                      value={resetNewPass}
-                      onChange={(e) => setResetNewPass(e.target.value)}
-                      placeholder="Enter new password"
-                      className="mt-1 w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 px-4 text-xs text-white focus:border-blue-500 focus:outline-none"
-                    />
+                    <div className="relative mt-1">
+                      <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                      <input
+                        type="password"
+                        required
+                        value={resetNewPass}
+                        onChange={(e) => setResetNewPass(e.target.value)}
+                        placeholder="Enter new password"
+                        className="w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-slate-300">Confirm New Password</label>
+                    <div className="relative mt-1">
+                      <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                      <input
+                        type="password"
+                        required
+                        value={resetConfirmPass}
+                        onChange={(e) => setResetConfirmPass(e.target.value)}
+                        placeholder="Re-enter new password"
+                        className="w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+                      />
+                    </div>
                   </div>
 
                   <button
@@ -674,14 +782,21 @@ export default function App() {
                     disabled={authLoading}
                     className="w-full rounded-xl bg-emerald-600 py-2.5 text-xs font-semibold text-white shadow-lg shadow-emerald-600/30 transition hover:bg-emerald-500 active:scale-95"
                   >
-                    {authLoading ? "Updating..." : "Save New Password"}
+                    {authLoading ? "Updating Password..." : "Save New Password"}
                   </button>
                 </form>
               )}
 
               <button
                 type="button"
-                onClick={() => { setPortalMode("user"); setAuthError(""); setAuthSuccess(""); setOtpSent(false); }}
+                onClick={() => {
+                  setPortalMode("user");
+                  setResetStep(1);
+                  setResetOtp("");
+                  setOtpTimer(0);
+                  setAuthError("");
+                  setAuthSuccess("");
+                }}
                 className="flex w-full items-center justify-center gap-1.5 pt-2 text-xs text-slate-400 hover:text-white"
               >
                 <ArrowLeft className="h-3.5 w-3.5" /> Back to Sign In

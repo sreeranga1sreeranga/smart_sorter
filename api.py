@@ -3,6 +3,9 @@ import shutil
 import sqlite3
 import random
 import hashlib
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from typing import List, Optional
 from pydantic import BaseModel
@@ -16,6 +19,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "documents.db")
 ORGANIZED_DIR = os.path.join(BASE_DIR, "organized_files")
 CREATOR_EMAIL = "noragamiarota@gmail.com"
+
+# Gmail SMTP Configuration (Set via terminal export or paste App Password below)
+SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "noragamiarota@gmail.com")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "iilgvfiryaqvgsit")
 
 os.makedirs(ORGANIZED_DIR, exist_ok=True)
 
@@ -80,7 +87,7 @@ def init_and_migrate_db():
         );
     """)
 
-    # Migration Safety: Check if columns exist in document_history
+    # Migration Safety: Ensure all columns exist in document_history
     c.execute("PRAGMA table_info(document_history);")
     cols = [col["name"] for col in c.fetchall()]
     if "file_path" not in cols:
@@ -116,7 +123,7 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------
-# PYDANTIC SCHEMAS
+# PYDANTIC SCHEMAS & HELPERS
 # ---------------------------------------------------------
 class RegisterSchema(BaseModel):
     name: str
@@ -131,6 +138,10 @@ class LoginSchema(BaseModel):
 class RequestOtpSchema(BaseModel):
     email: str
 
+class VerifyOtpSchema(BaseModel):
+    email: str
+    otp: str
+
 class ResetPasswordSchema(BaseModel):
     email: str
     otp: str
@@ -142,64 +153,77 @@ def hash_pw(password: str) -> str:
 def verify_pw(plain: str, stored: str) -> bool:
     return stored == plain or stored == hash_pw(plain)
 
+def send_otp_email(receiver_email: str, username: str, otp_code: str) -> bool:
+    """Sends the 6-digit OTP to the user's registered email via Gmail SMTP."""
+    if not SMTP_EMAIL or not SMTP_PASSWORD:
+        print(f"⚠️ [SMTP NOT CONFIGURED] Set SMTP_PASSWORD to send live emails. OTP for {receiver_email}: {otp_code}")
+        return False
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"SmartSorter Password Recovery Code: {otp_code}"
+        msg["From"] = f"SmartSorter Security <{SMTP_EMAIL}>"
+        msg["To"] = receiver_email
+
+        html_body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: auto; padding: 24px; background: #0f172a; color: #f8fafc; border-radius: 12px;">
+            <h2 style="color: #3b82f6; margin-top: 0;">SmartSorter Security</h2>
+            <p>Hello <strong>{username}</strong>,</p>
+            <p>Use the following 6-digit verification code to reset your SmartSorter password. This code expires in <strong>3 minutes</strong>:</p>
+            <div style="background: #1e293b; padding: 16px; text-align: center; font-size: 28px; font-weight: bold; letter-spacing: 6px; border-radius: 8px; color: #38bdf8; margin: 20px 0;">
+                {otp_code}
+            </div>
+            <p style="font-size: 12px; color: #94a3b8;">If you did not request this password reset, please ignore this email.</p>
+        </div>
+        """
+        msg.attach(MIMEText(html_body, "html"))
+
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as server:
+            server.starttls()
+            server.login(SMTP_EMAIL, SMTP_PASSWORD)
+            server.sendmail(SMTP_EMAIL, receiver_email, msg.as_string())
+        return True
+    except Exception as e:
+        print(f"❌ [SMTP Error]: {e}")
+        return False
+
 # ---------------------------------------------------------
-# AUTHENTICATION ENDPOINTS
+# AUTHENTICATION & 3-STEP OTP RECOVERY ENDPOINTS
 # ---------------------------------------------------------
-@app.post("/api/auth/request-otp")
-def request_password_otp(payload: RequestOtpSchema):
+@app.post("/api/auth/register")
+def register_user(payload: RegisterSchema):
     conn = get_db()
     c = conn.cursor()
     try:
         clean_email = payload.email.strip().lower()
-        c.execute("SELECT username FROM users WHERE LOWER(email) = ?", (clean_email,))
-        user = c.fetchone()
-        if not user:
-            raise HTTPException(status_code=404, detail="No account registered with this email address.")
+        role = "admin" if clean_email == CREATOR_EMAIL.lower() else "user"
 
-        otp_code = str(random.randint(100000, 999999))
-        # Store clean standard UTC string
-        expires_at = (datetime.utcnow() + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("SELECT id FROM users WHERE LOWER(email) = ?", (clean_email,))
+        if c.fetchone():
+            raise HTTPException(status_code=400, detail="Account with this email already exists.")
 
-        c.execute("DELETE FROM otp_codes WHERE LOWER(email) = ?", (clean_email,))
-        c.execute("INSERT INTO otp_codes (email, otp, expires_at) VALUES (?, ?, ?)", (clean_email, otp_code, expires_at))
+        pwd_hash = hash_pw(payload.password)
+        c.execute(
+            "INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)",
+            (payload.name.strip(), clean_email, pwd_hash, role)
+        )
+        user_id = c.lastrowid
 
         c.execute(
-            "INSERT INTO system_logs (timestamp, username, action, details) VALUES (datetime('now'), ?, 'OTP Dispatched', ?)",
-            (user["username"], f"Dispatched recovery code for {clean_email}")
+            "INSERT INTO system_logs (timestamp, username, action, details) VALUES (datetime('now'), ?, 'User Registered', ?)",
+            (payload.name.strip(), f"New account created with role '{role}'")
         )
         conn.commit()
 
-        return {"message": f"Verification code dispatched! (Preview: {otp_code})", "preview_otp": otp_code}
-    finally:
-        conn.close()
-
-@app.post("/api/auth/reset-password")
-def reset_password(payload: ResetPasswordSchema):
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        clean_email = payload.email.strip().lower()
-        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-
-        c.execute(
-            "SELECT id FROM otp_codes WHERE LOWER(email) = ? AND otp = ? AND expires_at > ?",
-            (clean_email, payload.otp.strip(), now_str)
-        )
-        record = c.fetchone()
-        if not record:
-            raise HTTPException(status_code=400, detail="Invalid or expired OTP code.")
-
-        new_hash = hash_pw(payload.new_password)
-        c.execute("UPDATE users SET password_hash = ? WHERE LOWER(email) = ?", (new_hash, clean_email))
-        c.execute("DELETE FROM otp_codes WHERE LOWER(email) = ?", (clean_email,))
-
-        c.execute(
-            "INSERT INTO system_logs (timestamp, username, action, details) VALUES (datetime('now'), ?, 'Password Reset', ?)",
-            (clean_email, "Password successfully updated via OTP verification")
-        )
-        conn.commit()
-
-        return {"message": "Password successfully updated! You can now sign in."}
+        return {
+            "message": "Account created successfully",
+            "user": {
+                "id": user_id,
+                "name": payload.name.strip(),
+                "email": clean_email,
+                "role": role
+            }
+        }
     finally:
         conn.close()
 
@@ -250,22 +274,52 @@ def request_password_otp(payload: RequestOtpSchema):
             raise HTTPException(status_code=404, detail="No account registered with this email address.")
 
         otp_code = str(random.randint(100000, 999999))
-        expires_at = datetime.utcnow() + timedelta(minutes=15)
+        # Strict 3-minute (180 seconds) expiration window in UTC
+        expires_at = (datetime.utcnow() + timedelta(minutes=3)).strftime("%Y-%m-%d %H:%M:%S")
 
         c.execute("DELETE FROM otp_codes WHERE LOWER(email) = ?", (clean_email,))
         c.execute("INSERT INTO otp_codes (email, otp, expires_at) VALUES (?, ?, ?)", (clean_email, otp_code, expires_at))
 
         c.execute(
             "INSERT INTO system_logs (timestamp, username, action, details) VALUES (datetime('now'), ?, 'OTP Dispatched', ?)",
-            (user["username"], f"Generated recovery OTP for {clean_email}")
+            (user["username"], f"Dispatched 3-minute recovery OTP to {clean_email}")
         )
         conn.commit()
 
+        email_sent = send_otp_email(clean_email, user["username"], otp_code)
+
         print(f"\n==========================================")
-        print(f"🔑 [SMARTSORTER SECURITY OTP]: {otp_code} for {clean_email}")
+        print(f"🔑 [SMARTSORTER 3-MIN OTP]: {otp_code} for {clean_email} (Email Sent: {email_sent})")
         print(f"==========================================\n")
 
-        return {"message": f"Verification code dispatched! (Preview: {otp_code})"}
+        # Do NOT include the OTP digits in the response so the frontend never auto-fills it
+        return {
+            "message": f"6-digit verification code sent to {clean_email}. Valid for 3 minutes.",
+            "expires_in_seconds": 180
+        }
+    finally:
+        conn.close()
+
+@app.post("/api/auth/verify-otp")
+def verify_password_otp(payload: VerifyOtpSchema):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        clean_email = payload.email.strip().lower()
+        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+        c.execute(
+            "SELECT id, expires_at FROM otp_codes WHERE LOWER(email) = ? AND otp = ?",
+            (clean_email, payload.otp.strip())
+        )
+        record = c.fetchone()
+        if not record:
+            raise HTTPException(status_code=400, detail="Invalid OTP code. Please check your email and try again.")
+
+        if record["expires_at"] <= now_str:
+            raise HTTPException(status_code=400, detail="OTP has expired (3-minute limit). Please click Resend OTP.")
+
+        return {"message": "OTP verified successfully! Please enter your new password."}
     finally:
         conn.close()
 
@@ -275,13 +329,15 @@ def reset_password(payload: ResetPasswordSchema):
     c = conn.cursor()
     try:
         clean_email = payload.email.strip().lower()
+        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
         c.execute(
-            "SELECT id FROM otp_codes WHERE LOWER(email) = ? AND otp = ? AND expires_at > datetime('now')",
-            (clean_email, payload.otp.strip())
+            "SELECT id FROM otp_codes WHERE LOWER(email) = ? AND otp = ? AND expires_at > ?",
+            (clean_email, payload.otp.strip(), now_str)
         )
         record = c.fetchone()
         if not record:
-            raise HTTPException(status_code=400, detail="Invalid or expired OTP code.")
+            raise HTTPException(status_code=400, detail="OTP session expired or invalid. Please request a new OTP.")
 
         new_hash = hash_pw(payload.new_password)
         c.execute("UPDATE users SET password_hash = ? WHERE LOWER(email) = ?", (new_hash, clean_email))
@@ -346,7 +402,7 @@ async def upload_and_classify_documents(
             with open(disk_path, "wb") as f_out:
                 f_out.write(contents)
 
-            # SQLite persistence (satisfies NOT NULL constraint on file_path)
+            # SQLite persistence
             c.execute("""
                 INSERT INTO document_history (user_id, filename, category, file_path, size_kb, status, created_at)
                 VALUES (?, ?, ?, ?, ?, 'Active', datetime('now'))
