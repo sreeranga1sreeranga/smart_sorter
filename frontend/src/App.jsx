@@ -25,13 +25,25 @@ import {
   RefreshCw,
   ArrowLeft, 
   AlertCircle, 
-  ShieldCheck 
+  ShieldCheck,
+  Download,
+  Eye,
+  ExternalLink
 } from "lucide-react";
 
 const API_BASE = "http://localhost:8000/api";
 const CREATOR_EMAIL = "noragamiarota@gmail.com";
 
-// Single-line timestamp: '30 Sep 2026, 10:14 PM'
+const STANDARD_CATEGORIES = [
+  "Lecture Notes",
+  "Classroom Instruction",
+  "Question Bank",
+  "Chat Transcript",
+  "Research Paper",
+  "Financial & Admin",
+  "Miscellaneous"
+];
+
 const formatTimestamp = (raw) => {
   if (!raw) return "—";
   try {
@@ -81,7 +93,7 @@ export default function App() {
   const [authSuccess, setAuthSuccess] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
 
-  // Inputs
+  // Auth & 3-Step OTP States
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [regName, setRegName] = useState("");
@@ -91,24 +103,10 @@ export default function App() {
   const [resetOtp, setResetOtp] = useState("");
   const [resetNewPass, setResetNewPass] = useState("");
   const [resetConfirmPass, setResetConfirmPass] = useState("");
-  const [resetStep, setResetStep] = useState(1); // 1: Email, 2: Verify OTP, 3: Set New Password
-  const [otpTimer, setOtpTimer] = useState(0);   // 180 seconds (3 minutes)
+  const [resetStep, setResetStep] = useState(1); // 1: Email, 2: Verify OTP (3-min), 3: Update Password
+  const [otpTimer, setOtpTimer] = useState(0);
 
-  // 3-Minute Countdown Timer Effect
-  useEffect(() => {
-    if (portalMode !== "reset" || resetStep !== 2 || otpTimer <= 0) return;
-    const timerId = setInterval(() => {
-      setOtpTimer((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
-    return () => clearInterval(timerId);
-  }, [portalMode, resetStep, otpTimer]);
-
-  const formatCountdown = (secs) => {
-    const mins = String(Math.floor(secs / 60)).padStart(2, "0");
-    const remSecs = String(secs % 60).padStart(2, "0");
-    return `${mins}:${remSecs}`;
-  };
-  // Workspace
+  // Workspace States
   const [activeTab, setActiveTab] = useState("library"); // 'library' | 'drive' | 'audit' | 'admin'
   const [summary, setSummary] = useState({
     active_files_count: 0,
@@ -132,12 +130,28 @@ export default function App() {
   const [selectedFolder, setSelectedFolder] = useState("All");
   const [statusFilter, setStatusFilter] = useState("Active");
 
-  // Upload Modal
+  // Modals (Upload & In-App File Preview)
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [previewDoc, setPreviewDoc] = useState(null);
 
   const isCreatorAdmin = currentUser && currentUser.email?.toLowerCase() === CREATOR_EMAIL.toLowerCase();
+
+  // 3-Minute OTP Countdown Hook
+  useEffect(() => {
+    if (portalMode !== "reset" || resetStep !== 2 || otpTimer <= 0) return;
+    const timerId = setInterval(() => {
+      setOtpTimer((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timerId);
+  }, [portalMode, resetStep, otpTimer]);
+
+  const formatCountdown = (secs) => {
+    const mins = String(Math.floor(secs / 60)).padStart(2, "0");
+    const remSecs = String(secs % 60).padStart(2, "0");
+    return `${mins}:${remSecs}`;
+  };
 
   useEffect(() => {
     if (!isCreatorAdmin && (activeTab === "audit" || activeTab === "admin")) {
@@ -185,6 +199,7 @@ export default function App() {
     fetchWorkspace();
   }, [currentUser, search, statusFilter, activeTab]);
 
+  // Auth Handlers
   const handleLogin = async (e, isAdminGate = false) => {
     e.preventDefault();
     setAuthError("");
@@ -242,6 +257,7 @@ export default function App() {
     }
   };
 
+  // STEP 1 -> STEP 2: Send OTP & Start 3-Minute Timer
   const handleSendOtp = async (e) => {
     if (e) e.preventDefault();
     if (!resetEmail.trim()) {
@@ -253,28 +269,29 @@ export default function App() {
     setAuthLoading(true);
 
     try {
-      const res = await axios.post(`${API_BASE}/auth/request-otp`, {
-        email: resetEmail.trim(),
+      const res = await axios.post(`${API_BASE}/auth/request-otp`, { 
+        email: resetEmail.trim() 
       });
-      setResetOtp(""); // Always keep OTP box empty so user types it manually
+      setResetOtp(""); // Keep input empty for user entry
       setResetStep(2);
-      setOtpTimer(180); // Start 3-minute (180s) countdown
-      setAuthSuccess(res.data.message || "OTP sent to your registered email!");
+      setOtpTimer(180); // 3 minutes (180 seconds)
+      setAuthSuccess(res.data.message || "Verification code sent to your email!");
     } catch (err) {
-      setAuthError(err.response?.data?.detail || "Failed to send verification code.");
+      setAuthError(err.response?.data?.detail || "Failed to dispatch verification code.");
     } finally {
       setAuthLoading(false);
     }
   };
 
+  // STEP 2 -> STEP 3: Verify OTP First
   const handleVerifyOtp = async (e) => {
     e.preventDefault();
     if (otpTimer <= 0) {
-      setAuthError("Time expired! Please click Resend OTP to receive a new code.");
+      setAuthError("OTP time limit expired! Please click Resend OTP.");
       return;
     }
     if (resetOtp.trim().length !== 6) {
-      setAuthError("Please enter the complete 6-digit OTP sent to your email.");
+      setAuthError("Please enter the 6-digit OTP code.");
       return;
     }
     setAuthError("");
@@ -286,23 +303,20 @@ export default function App() {
         email: resetEmail.trim(),
         otp: resetOtp.trim(),
       });
-      setResetStep(3); // Unlock the New Password page!
-      setAuthSuccess(res.data.message || "OTP verified! Please enter your new password.");
+      setResetStep(3);
+      setAuthSuccess(res.data.message || "OTP verified! Set your new password below.");
     } catch (err) {
-      setAuthError(err.response?.data?.detail || "Invalid OTP code. Please try again.");
+      setAuthError(err.response?.data?.detail || "Invalid OTP code.");
     } finally {
       setAuthLoading(false);
     }
   };
 
+  // STEP 3: Save New Password
   const handleResetPassword = async (e) => {
     e.preventDefault();
-    if (resetNewPass.length < 4) {
-      setAuthError("Password must be at least 4 characters long.");
-      return;
-    }
     if (resetNewPass !== resetConfirmPass) {
-      setAuthError("Passwords do not match.");
+      setAuthError("New password and confirm password do not match.");
       return;
     }
     setAuthError("");
@@ -315,7 +329,7 @@ export default function App() {
         otp: resetOtp.trim(),
         new_password: resetNewPass,
       });
-      setAuthSuccess("Password updated successfully! Redirecting to Sign In...");
+      setAuthSuccess("Password successfully changed! Redirecting to sign in...");
       setTimeout(() => {
         setPortalMode("user");
         setLoginEmail(resetEmail.trim());
@@ -326,7 +340,7 @@ export default function App() {
         setAuthSuccess("");
       }, 1400);
     } catch (err) {
-      setAuthError(err.response?.data?.detail || "Could not update password.");
+      setAuthError(err.response?.data?.detail || "Invalid or expired OTP session.");
     } finally {
       setAuthLoading(false);
     }
@@ -339,6 +353,37 @@ export default function App() {
     setLoginPassword("");
   };
 
+  // Document & Feature Handlers
+  const handleCategoryChange = async (docId, newCategory) => {
+    try {
+      await axios.put(`${API_BASE}/documents/${docId}/category`, {
+        new_category: newCategory,
+      });
+      if (previewDoc && previewDoc.id === docId) {
+        setPreviewDoc({ ...previewDoc, category: newCategory });
+      }
+      await fetchWorkspace();
+    } catch (err) {
+      alert("Failed to move category: " + (err.response?.data?.detail || err.message));
+    }
+  };
+
+  const handleDownloadFile = (docId) => {
+    window.open(`${API_BASE}/documents/${docId}/file?download=true`, "_blank");
+  };
+
+  const handleExportFolderZip = (categoryName, e) => {
+    if (e) e.stopPropagation();
+    window.open(
+      `${API_BASE}/documents/export-zip?user_id=${currentUser.id}&category=${encodeURIComponent(categoryName)}`,
+      "_blank"
+    );
+  };
+
+  const handleExportAuditCsv = () => {
+    window.open(`${API_BASE}/admin/export-audit-csv`, "_blank");
+  };
+
   const handleDeleteSingle = async (docId, filename, permanent = false) => {
     const confirmMsg = permanent 
       ? `Permanently delete "${filename}"? This removes it completely from SQLite and disk.`
@@ -347,6 +392,7 @@ export default function App() {
 
     try {
       await axios.delete(`${API_BASE}/documents/${docId}?permanent=${permanent}`);
+      if (previewDoc && previewDoc.id === docId) setPreviewDoc(null);
       await fetchWorkspace();
     } catch (err) {
       console.error("Delete failed:", err);
@@ -426,6 +472,10 @@ export default function App() {
     if (["mp4", "mov", "avi"].includes(ext)) return <Video className="w-6 h-6 text-purple-400" />;
     return <Package className="w-6 h-6 text-slate-400" />;
   };
+
+  const allCategoryOptions = Array.from(
+    new Set([...STANDARD_CATEGORIES, ...Object.keys(summary.category_counts || {})])
+  );
 
   // VIEW 1: AUTH PORTAL
   if (!currentUser) {
@@ -540,7 +590,15 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setPortalMode("reset"); setResetEmail(loginEmail); setAuthError(""); setAuthSuccess(""); }}
+                  onClick={() => {
+                    setPortalMode("reset");
+                    setResetEmail(loginEmail);
+                    setResetStep(1);
+                    setResetOtp("");
+                    setOtpTimer(0);
+                    setAuthError("");
+                    setAuthSuccess("");
+                  }}
                   className="font-medium text-blue-400 hover:text-blue-300"
                 >
                   Forgot password?
@@ -662,7 +720,7 @@ export default function App() {
 
           {portalMode === "reset" && (
             <div className="space-y-4">
-              {/* STEP 1: ENTER EMAIL */}
+              {/* STEP 1: REQUEST OTP */}
               {resetStep === 1 && (
                 <form onSubmit={handleSendOtp} className="space-y-4">
                   <div>
@@ -685,12 +743,12 @@ export default function App() {
                     disabled={authLoading}
                     className="w-full rounded-xl bg-blue-600 py-2.5 text-xs font-semibold text-white shadow-lg shadow-blue-600/30 hover:bg-blue-500 transition disabled:opacity-50"
                   >
-                    {authLoading ? "Sending OTP to Email..." : "📧 Send OTP to Email"}
+                    {authLoading ? "Dispatching OTP..." : "📧 Send OTP to Registered Email"}
                   </button>
                 </form>
               )}
 
-              {/* STEP 2: ENTER OTP WITHIN 3 MINUTES */}
+              {/* STEP 2: ENTER & VERIFY OTP WITHIN 3 MINUTES */}
               {resetStep === 2 && (
                 <form onSubmit={handleVerifyOtp} className="space-y-4">
                   <div className="flex items-center justify-between rounded-xl bg-slate-900/90 border border-white/10 px-3.5 py-2 text-xs">
@@ -738,13 +796,13 @@ export default function App() {
                       disabled={authLoading}
                       className="w-full rounded-xl bg-amber-500 py-2.5 text-xs font-bold text-slate-950 shadow-lg shadow-amber-500/20 transition hover:bg-amber-400"
                     >
-                      {authLoading ? "Dispatching New Code..." : "↻ Resend OTP (3 Min Expired)"}
+                      {authLoading ? "Sending New OTP..." : "↻ Resend OTP"}
                     </button>
                   )}
                 </form>
               )}
 
-              {/* STEP 3: UPDATE NEW PASSWORD (UNLOCKED ONLY AFTER OTP VERIFICATION) */}
+              {/* STEP 3: UPDATE NEW PASSWORD (AFTER OTP VERIFIED) */}
               {resetStep === 3 && (
                 <form onSubmit={handleResetPassword} className="space-y-4">
                   <div>
@@ -771,7 +829,7 @@ export default function App() {
                         required
                         value={resetConfirmPass}
                         onChange={(e) => setResetConfirmPass(e.target.value)}
-                        placeholder="Re-enter new password"
+                        placeholder="Confirm new password"
                         className="w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
                       />
                     </div>
@@ -782,7 +840,7 @@ export default function App() {
                     disabled={authLoading}
                     className="w-full rounded-xl bg-emerald-600 py-2.5 text-xs font-semibold text-white shadow-lg shadow-emerald-600/30 transition hover:bg-emerald-500 active:scale-95"
                   >
-                    {authLoading ? "Updating Password..." : "Save New Password"}
+                    {authLoading ? "Updating..." : "Save New Password"}
                   </button>
                 </form>
               )}
@@ -934,14 +992,24 @@ export default function App() {
             <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
             <input
               type="text"
-              placeholder="Search documents, categories, formats..."
+              placeholder="Search filenames, categories, or AI summaries..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full bg-[#162032] border border-white/5 rounded-xl pl-10 pr-4 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500/50 transition"
             />
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            {summary.active_files_count > 0 && (
+              <button
+                onClick={(e) => handleExportFolderZip("All", e)}
+                title="Download All Active Files as ZIP"
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold border border-white/10 transition"
+              >
+                <Download className="w-3.5 h-3.5 text-amber-400" />
+                <span>Export All (.zip)</span>
+              </button>
+            )}
             <button
               onClick={fetchWorkspace}
               title="Refresh Workspace"
@@ -965,20 +1033,20 @@ export default function App() {
             <div className="mb-4 flex items-baseline justify-between">
               <div>
                 <h2 className="text-xl font-bold tracking-tight">Main Library</h2>
-                <p className="text-xs text-slate-400 mt-0.5">Filter by folder or explore all organized files</p>
+                <p className="text-xs text-slate-400 mt-0.5">Click any folder to filter, export a folder as ZIP, or click a file to preview</p>
               </div>
               <span className="text-xs text-slate-500">{displayedDocs.length} items visible</span>
             </div>
 
             <div className="mb-8">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Folders</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Smart Folders</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
                 {Object.keys(summary.category_counts).length > 0 ? (
                   Object.entries(summary.category_counts).map(([cat, count]) => (
                     <div
                       key={cat}
                       onClick={() => setSelectedFolder(selectedFolder === cat ? "All" : cat)}
-                      className={`border rounded-xl p-3.5 flex items-center justify-between transition cursor-pointer ${
+                      className={`border rounded-xl p-3.5 flex items-center justify-between transition cursor-pointer group ${
                         selectedFolder === cat 
                           ? "bg-amber-500/20 border-amber-500/50 ring-1 ring-amber-500/30" 
                           : "bg-amber-500/[0.06] border-amber-500/20 hover:border-amber-500/40"
@@ -988,9 +1056,19 @@ export default function App() {
                         <Folder className="w-4 h-4 text-amber-400 shrink-0" />
                         <span className="text-xs font-semibold text-amber-200 truncate">{cat}</span>
                       </div>
-                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300">
-                        {count}
-                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={(e) => handleExportFolderZip(cat, e)}
+                          title={`Download '${cat}' folder as .zip`}
+                          className="p-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/30 text-amber-300 transition"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                        </button>
+                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300">
+                          {count}
+                        </span>
+                      </div>
                     </div>
                   ))
                 ) : (
@@ -1006,17 +1084,43 @@ export default function App() {
                   {displayedDocs.map((doc) => (
                     <div
                       key={doc.id}
-                      className="bg-[#151d2c] border border-white/5 hover:border-blue-500/40 rounded-xl p-4 flex flex-col items-center text-center transition group hover:-translate-y-1 shadow-sm relative"
+                      onClick={() => setPreviewDoc(doc)}
+                      className="bg-[#151d2c] border border-white/5 hover:border-blue-500/40 rounded-xl p-4 flex flex-col items-center text-center transition group hover:-translate-y-1 shadow-sm relative cursor-pointer"
                     >
+                      {/* Hover Quick Actions (Preview & Download) */}
+                      <div className="absolute top-2.5 right-2.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setPreviewDoc(doc); }}
+                          title="Preview Document"
+                          className="p-1.5 rounded-lg bg-slate-900/90 hover:bg-blue-600 text-slate-300 hover:text-white border border-white/10"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); handleDownloadFile(doc.id); }}
+                          title="Download File"
+                          className="p-1.5 rounded-lg bg-slate-900/90 hover:bg-emerald-600 text-slate-300 hover:text-white border border-white/10"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
                       <div className="w-12 h-12 rounded-xl bg-white/[0.03] border border-white/5 flex items-center justify-center mb-3 group-hover:scale-105 transition">
                         {getFileIcon(doc.filename)}
                       </div>
                       <p className="text-xs font-semibold text-slate-200 w-full truncate mb-1" title={doc.filename}>
                         {doc.filename}
                       </p>
-                      <span className="text-[10px] text-slate-500 font-medium">
+                      <span className="text-[10px] text-amber-400/90 font-semibold mb-1">
                         {doc.category} • {doc.size_kb} KB
                       </span>
+                      {doc.summary && (
+                        <p className="text-[10px] text-slate-400 line-clamp-2 leading-relaxed mt-0.5" title={doc.summary}>
+                          {doc.summary}
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1036,7 +1140,7 @@ export default function App() {
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 className="text-xl font-bold tracking-tight">Drive File Catalog</h2>
-                <p className="text-xs text-slate-400 mt-0.5">Manage active files, trash, or permanently remove from SQLite</p>
+                <p className="text-xs text-slate-400 mt-0.5">Preview, download, override AI folder categories, or manage trash</p>
               </div>
 
               <div className="flex items-center gap-3">
@@ -1074,8 +1178,8 @@ export default function App() {
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-900/60 text-slate-400 uppercase text-[10px] tracking-wider border-b border-white/5">
                   <tr>
-                    <th className="py-3 px-4">Filename</th>
-                    <th className="py-3 px-4">Category</th>
+                    <th className="py-3 px-4">Document & AI Summary</th>
+                    <th className="py-3 px-4">Category (Override)</th>
                     <th className="py-3 px-4">Size</th>
                     <th className="py-3 px-4">Status</th>
                     <th className="py-3 px-4">Processed Date</th>
@@ -1086,9 +1190,28 @@ export default function App() {
                   {documents.length > 0 ? (
                     documents.map((d) => (
                       <tr key={d.id} className="hover:bg-white/[0.02] transition">
-                        <td className="py-3 px-4 font-semibold text-slate-200 truncate max-w-xs">{d.filename}</td>
-                        <td className="py-3 px-4 text-slate-400">{d.category}</td>
-                        <td className="py-3 px-4 text-slate-400">{d.size_kb} KB</td>
+                        <td className="py-3 px-4 max-w-xs">
+                          <p className="font-semibold text-slate-200 truncate">{d.filename}</p>
+                          {d.summary && (
+                            <p className="text-[11px] text-slate-500 italic truncate mt-0.5" title={d.summary}>
+                              {d.summary}
+                            </p>
+                          )}
+                        </td>
+                        <td className="py-3 px-4">
+                          <select
+                            value={d.category}
+                            onChange={(e) => handleCategoryChange(d.id, e.target.value)}
+                            className="bg-slate-900/90 border border-white/10 rounded-lg px-2.5 py-1 text-xs text-amber-300 font-medium focus:border-blue-500 focus:outline-none cursor-pointer"
+                          >
+                            {allCategoryOptions.map((catOpt) => (
+                              <option key={catOpt} value={catOpt}>
+                                {catOpt}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="py-3 px-4 text-slate-400 whitespace-nowrap">{d.size_kb} KB</td>
                         <td className="py-3 px-4">
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                             d.status === "Active" ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400"
@@ -1101,7 +1224,23 @@ export default function App() {
                         </td>
                         
                         <td className="py-3 px-4 text-right">
-                          <div className="flex items-center justify-end gap-2">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => setPreviewDoc(d)}
+                              title="Preview File"
+                              className="p-1.5 rounded-lg bg-white/5 hover:bg-blue-500/20 text-slate-400 hover:text-blue-400 transition"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+
+                            <button
+                              onClick={() => handleDownloadFile(d.id)}
+                              title="Download File"
+                              className="p-1.5 rounded-lg bg-white/5 hover:bg-emerald-500/20 text-slate-400 hover:text-emerald-400 transition"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </button>
+
                             {d.status === "Active" ? (
                               <button
                                 onClick={() => handleDeleteSingle(d.id, d.filename, false)}
@@ -1150,13 +1289,22 @@ export default function App() {
                 <h2 className="text-xl font-bold tracking-tight mb-1">System & User Login Audit</h2>
                 <p className="text-xs text-slate-400">Restricted chronological log of all platform interactions</p>
               </div>
-              <button
-                onClick={fetchWorkspace}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold border border-white/10 transition"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Refresh Audit Logs</span>
-              </button>
+              <div className="flex items-center gap-2.5">
+                <button
+                  onClick={handleExportAuditCsv}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl text-xs font-bold shadow-md transition"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export Audit CSV</span>
+                </button>
+                <button
+                  onClick={fetchWorkspace}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold border border-white/10 transition"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Refresh Audit Logs</span>
+                </button>
+              </div>
             </div>
 
             <div className="rounded-xl border border-white/5 bg-[#151d2c] overflow-hidden">
@@ -1211,7 +1359,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* Metrics Cards Grid */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="bg-[#151d2c] border border-white/5 p-4 rounded-xl">
                 <p className="text-[11px] text-slate-400 uppercase font-semibold">User Accounts</p>
@@ -1240,7 +1387,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Registered Users Roster Table */}
             <div className="rounded-xl border border-white/5 bg-[#151d2c] overflow-hidden">
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-900/60 text-slate-400 uppercase text-[10px] tracking-wider border-b border-white/5">
@@ -1320,7 +1466,11 @@ export default function App() {
           ) : (
             documents.length > 0 ? (
               documents.slice(0, 10).map((doc) => (
-                <div key={doc.id} className="p-3 rounded-xl bg-white/[0.02] border border-white/5 text-xs flex items-center gap-3">
+                <div
+                  key={doc.id}
+                  onClick={() => setPreviewDoc(doc)}
+                  className="p-3 rounded-xl bg-white/[0.02] hover:bg-white/[0.05] border border-white/5 text-xs flex items-center gap-3 cursor-pointer transition"
+                >
                   <div className="p-2 rounded-lg bg-white/5">
                     {getFileIcon(doc.filename)}
                   </div>
@@ -1337,7 +1487,7 @@ export default function App() {
         </div>
       </aside>
 
-      {/* UPLOAD MODAL */}
+      {/* MODAL 1: UPLOAD DOCUMENTS */}
       {uploadModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-[#151d2c] border border-white/10 rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
@@ -1349,7 +1499,7 @@ export default function App() {
             </button>
 
             <h3 className="text-base font-bold mb-1">Upload Documents</h3>
-            <p className="text-xs text-slate-400 mb-4">Gemini Flash analyzes and categorizes each file dynamically.</p>
+            <p className="text-xs text-slate-400 mb-4">Gemini Flash categorizes and generates a 1-line summary for each file.</p>
 
             <form onSubmit={handleUploadSubmit}>
               <div className="border-2 border-dashed border-white/10 hover:border-blue-500/50 rounded-xl p-6 text-center cursor-pointer mb-4">
@@ -1377,9 +1527,85 @@ export default function App() {
                 disabled={isUploading || selectedFiles.length === 0}
                 className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white rounded-xl text-xs font-semibold transition"
               >
-                {isUploading ? "Classifying with Gemini..." : `Process ${selectedFiles.length} File(s)`}
+                {isUploading ? "Classifying & Summarizing..." : `Process ${selectedFiles.length} File(s)`}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: IN-BROWSER DOCUMENT PREVIEW & DETAILS */}
+      {previewDoc && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#111827] border border-white/10 rounded-2xl w-full max-w-4xl h-[82vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-[#151d2c]">
+              <div className="flex items-center gap-3 overflow-hidden">
+                {getFileIcon(previewDoc.filename)}
+                <div className="overflow-hidden">
+                  <h3 className="text-sm font-bold text-white truncate">{previewDoc.filename}</h3>
+                  <p className="text-[11px] text-slate-400 truncate">
+                    {previewDoc.summary || `Classified under ${previewDoc.category}`}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2.5 shrink-0">
+                <select
+                  value={previewDoc.category}
+                  onChange={(e) => handleCategoryChange(previewDoc.id, e.target.value)}
+                  className="bg-slate-900 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-amber-300 font-semibold focus:outline-none"
+                >
+                  {allCategoryOptions.map((catOpt) => (
+                    <option key={catOpt} value={catOpt}>
+                      {catOpt}
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  onClick={() => window.open(`${API_BASE}/documents/${previewDoc.id}/file?download=false`, "_blank")}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold border border-white/10 transition"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Open Tab</span>
+                </button>
+
+                <button
+                  onClick={() => handleDownloadFile(previewDoc.id)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold transition"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download</span>
+                </button>
+
+                <button
+                  onClick={() => setPreviewDoc(null)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/5"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body / Live File Frame */}
+            <div className="flex-1 bg-slate-950 flex items-center justify-center overflow-hidden p-4">
+              {["png", "jpg", "jpeg", "webp", "gif", "svg"].includes(
+                previewDoc.filename.split(".").pop().toLowerCase()
+              ) ? (
+                <img
+                  src={`${API_BASE}/documents/${previewDoc.id}/file?download=false`}
+                  alt={previewDoc.filename}
+                  className="max-h-full max-w-full object-contain rounded-lg shadow-lg"
+                />
+              ) : (
+                <iframe
+                  title={previewDoc.filename}
+                  src={`${API_BASE}/documents/${previewDoc.id}/file?download=false`}
+                  className="w-full h-full rounded-lg border border-white/10 bg-white"
+                />
+              )}
+            </div>
           </div>
         </div>
       )}

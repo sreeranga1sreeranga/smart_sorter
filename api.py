@@ -1,16 +1,21 @@
 import os
+import io
+import csv
 import shutil
 import sqlite3
 import random
 import hashlib
+import zipfile
+import mimetypes
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from typing import List, Optional
 from pydantic import BaseModel
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, status
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
 
 # ---------------------------------------------------------
 # CONSTANTS & CONFIGURATION
@@ -20,9 +25,8 @@ DB_PATH = os.path.join(BASE_DIR, "documents.db")
 ORGANIZED_DIR = os.path.join(BASE_DIR, "organized_files")
 CREATOR_EMAIL = "noragamiarota@gmail.com"
 
-# Gmail SMTP Configuration (Set via terminal export or paste App Password below)
 SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "noragamiarota@gmail.com")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "iilgvfiryaqvgsit")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 
 os.makedirs(ORGANIZED_DIR, exist_ok=True)
 
@@ -58,6 +62,7 @@ def init_and_migrate_db():
             user_id INTEGER NOT NULL,
             filename TEXT NOT NULL,
             category TEXT NOT NULL,
+            summary TEXT DEFAULT '',
             file_path TEXT,
             size_kb REAL DEFAULT 0.0,
             status TEXT DEFAULT 'Active',
@@ -98,17 +103,18 @@ def init_and_migrate_db():
         c.execute("ALTER TABLE document_history ADD COLUMN status TEXT DEFAULT 'Active';")
     if "created_at" not in cols:
         c.execute("ALTER TABLE document_history ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP;")
+    if "summary" not in cols:
+        c.execute("ALTER TABLE document_history ADD COLUMN summary TEXT DEFAULT '';")
 
     conn.commit()
     conn.close()
 
-# Run DB sync on startup
 init_and_migrate_db()
 
 # ---------------------------------------------------------
 # FASTAPI APPLICATION & CORS MIDDLEWARE
 # ---------------------------------------------------------
-app = FastAPI(title="SmartSorter API", version="2.0.0")
+app = FastAPI(title="SmartSorter API", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -147,6 +153,9 @@ class ResetPasswordSchema(BaseModel):
     otp: str
     new_password: str
 
+class CategoryOverrideSchema(BaseModel):
+    new_category: str
+
 def hash_pw(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -154,9 +163,8 @@ def verify_pw(plain: str, stored: str) -> bool:
     return stored == plain or stored == hash_pw(plain)
 
 def send_otp_email(receiver_email: str, username: str, otp_code: str) -> bool:
-    """Sends the 6-digit OTP to the user's registered email via Gmail SMTP."""
     if not SMTP_EMAIL or not SMTP_PASSWORD:
-        print(f"⚠️ [SMTP NOT CONFIGURED] Set SMTP_PASSWORD to send live emails. OTP for {receiver_email}: {otp_code}")
+        print(f"⚠️ [SMTP NOT CONFIGURED] OTP for {receiver_email}: {otp_code}")
         return False
 
     try:
@@ -186,6 +194,45 @@ def send_otp_email(receiver_email: str, username: str, otp_code: str) -> bool:
     except Exception as e:
         print(f"❌ [SMTP Error]: {e}")
         return False
+
+def generate_ai_summary(filename: str, contents: bytes, category: str) -> str:
+    """Generates a concise 1-line summary via Gemini or intelligent content inspection."""
+    ext = filename.split(".")[-1].lower() if "." in filename else ""
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+
+    # Try live Gemini 1-line summary for text/code/small files if API key is present
+    if api_key and ext in ["txt", "md", "py", "js", "html", "css", "java", "sql", "json", "csv"]:
+        try:
+            from google import genai
+            client = genai.Client(api_key=api_key)
+            snippet = contents[:3000].decode("utf-8", errors="ignore")
+            prompt = (
+                f"Summarize this '{filename}' ({category}) file in ONE short sentence "
+                f"(maximum 12 words). No quotes:\n\n{snippet}"
+            )
+            resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+            if resp and resp.text:
+                clean_sum = resp.text.strip().replace("\n", " ")
+                return clean_sum[:110]
+        except Exception as e:
+            print(f"[Summary Fallback for {filename}]: {e}")
+
+    # Intelligent deterministic fallback summary
+    if ext in ["txt", "md", "py", "js", "html", "css", "java", "sql", "csv"]:
+        text_preview = contents[:1000].decode("utf-8", errors="ignore").strip()
+        lines = [line.strip() for line in text_preview.splitlines() if line.strip() and not line.strip().startswith(("#", "//", "/*"))]
+        if lines:
+            first_line = lines[0][:85]
+            return f"Snippet: {first_line}..." if len(lines[0]) > 85 else f"Content: {first_line}"
+
+    base_Title = os.path.splitext(filename)[0].replace("_", " ").replace("-", " ")
+    if ext == "pdf":
+        return f"PDF document sorted under {category} ({base_Title[:45]})"
+    elif ext in ["png", "jpg", "jpeg", "webp"]:
+        return f"Visual image asset indexed in {category}"
+    elif ext in ["doc", "docx", "ppt", "pptx"]:
+        return f"Office presentation/document for {category}"
+    return f"Indexed {ext.upper() or 'binary'} resource under {category}"
 
 # ---------------------------------------------------------
 # AUTHENTICATION & 3-STEP OTP RECOVERY ENDPOINTS
@@ -274,7 +321,6 @@ def request_password_otp(payload: RequestOtpSchema):
             raise HTTPException(status_code=404, detail="No account registered with this email address.")
 
         otp_code = str(random.randint(100000, 999999))
-        # Strict 3-minute (180 seconds) expiration window in UTC
         expires_at = (datetime.utcnow() + timedelta(minutes=3)).strftime("%Y-%m-%d %H:%M:%S")
 
         c.execute("DELETE FROM otp_codes WHERE LOWER(email) = ?", (clean_email,))
@@ -292,7 +338,6 @@ def request_password_otp(payload: RequestOtpSchema):
         print(f"🔑 [SMARTSORTER 3-MIN OTP]: {otp_code} for {clean_email} (Email Sent: {email_sent})")
         print(f"==========================================\n")
 
-        # Do NOT include the OTP digits in the response so the frontend never auto-fills it
         return {
             "message": f"6-digit verification code sent to {clean_email}. Valid for 3 minutes.",
             "expires_in_seconds": 180
@@ -354,7 +399,7 @@ def reset_password(payload: ResetPasswordSchema):
         conn.close()
 
 # ---------------------------------------------------------
-# DOCUMENT MANAGEMENT & MULTIMODAL INGESTION
+# DOCUMENT MANAGEMENT, AI SUMMARY & MULTIMODAL INGESTION
 # ---------------------------------------------------------
 @app.post("/api/documents/upload")
 async def upload_and_classify_documents(
@@ -375,7 +420,7 @@ async def upload_and_classify_documents(
             size_kb = round(len(contents) / 1024, 2)
             filename = file.filename
 
-            # Semantic Gemini Classification with Fallback
+            # 1. Semantic Gemini Classification with Fallback
             category = "Miscellaneous"
             try:
                 import classifier
@@ -394,7 +439,10 @@ async def upload_and_classify_documents(
                 else:
                     category = "Miscellaneous"
 
-            # Disk write
+            # 2. Generate 1-Line AI Summary
+            summary_text = generate_ai_summary(filename, contents, category)
+
+            # 3. Disk write
             user_target_dir = os.path.join(ORGANIZED_DIR, f"user_{user_id}", category)
             os.makedirs(user_target_dir, exist_ok=True)
             disk_path = os.path.join(user_target_dir, filename)
@@ -402,14 +450,14 @@ async def upload_and_classify_documents(
             with open(disk_path, "wb") as f_out:
                 f_out.write(contents)
 
-            # SQLite persistence
+            # 4. SQLite persistence
             c.execute("""
-                INSERT INTO document_history (user_id, filename, category, file_path, size_kb, status, created_at)
-                VALUES (?, ?, ?, ?, ?, 'Active', datetime('now'))
-            """, (user_id, filename, category, disk_path, size_kb))
+                INSERT INTO document_history (user_id, filename, category, summary, file_path, size_kb, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'Active', datetime('now'))
+            """, (user_id, filename, category, summary_text, disk_path, size_kb))
             doc_id = c.lastrowid
 
-            # Audit record
+            # 5. Audit record
             c.execute("""
                 INSERT INTO system_logs (timestamp, username, action, details)
                 VALUES (datetime('now'), ?, 'Files Sorted', ?)
@@ -419,6 +467,7 @@ async def upload_and_classify_documents(
                 "id": doc_id,
                 "filename": filename,
                 "category": category,
+                "summary": summary_text,
                 "file_path": disk_path,
                 "size_kb": size_kb,
                 "status": "Active"
@@ -452,9 +501,9 @@ def list_documents(
             params.append(status_filter)
 
         if search and search.strip():
-            query += " AND (filename LIKE ? OR category LIKE ?)"
+            query += " AND (filename LIKE ? OR category LIKE ? OR summary LIKE ?)"
             s_param = f"%{search.strip()}%"
-            params.extend([s_param, s_param])
+            params.extend([s_param, s_param, s_param])
 
         query += " ORDER BY id DESC"
         c.execute(query, params)
@@ -462,19 +511,185 @@ def list_documents(
 
         docs = []
         for r in rows:
+            rk = r.keys()
             docs.append({
                 "id": r["id"],
                 "filename": r["filename"],
                 "category": r["category"],
-                "file_path": r["file_path"] if "file_path" in r.keys() else "",
-                "size_kb": r["size_kb"] if "size_kb" in r.keys() else 0.0,
-                "status": r["status"] if "status" in r.keys() else "Active",
-                "created_at": r["created_at"] if "created_at" in r.keys() else ""
+                "summary": r["summary"] if "summary" in rk and r["summary"] else f"Sorted under {r['category']}",
+                "file_path": r["file_path"] if "file_path" in rk else "",
+                "size_kb": r["size_kb"] if "size_kb" in rk else 0.0,
+                "status": r["status"] if "status" in rk else "Active",
+                "created_at": r["created_at"] if "created_at" in rk else ""
             })
         return {"documents": docs}
     finally:
         conn.close()
 
+# ---------------------------------------------------------
+# FEATURE 1: FILE PREVIEW & DIRECT DOWNLOAD ENDPOINT
+# ---------------------------------------------------------
+@app.get("/api/documents/{doc_id}/file")
+def serve_document_file(doc_id: int, download: bool = Query(False)):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT * FROM document_history WHERE id = ?", (doc_id,))
+        doc = c.fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document record not found.")
+
+        rk = doc.keys()
+        disk_path = doc["file_path"] if "file_path" in rk and doc["file_path"] else os.path.join(
+            ORGANIZED_DIR, f"user_{doc['user_id']}", doc["category"], doc["filename"]
+        )
+
+        if not os.path.exists(disk_path):
+            raise HTTPException(status_code=404, detail="Physical file not found on disk.")
+
+        mime_type, _ = mimetypes.guess_type(doc["filename"])
+        if not mime_type:
+            mime_type = "application/octet-stream"
+
+        disposition = "attachment" if download else "inline"
+        return FileResponse(
+            path=disk_path,
+            media_type=mime_type,
+            headers={"Content-Disposition": f'{disposition}; filename="{doc["filename"]}"'}
+        )
+    finally:
+        conn.close()
+
+# ---------------------------------------------------------
+# FEATURE 2: ONE-CLICK SMART FOLDER ZIP EXPORT
+# ---------------------------------------------------------
+@app.get("/api/documents/export-zip")
+def export_category_zip(user_id: int = Query(...), category: str = Query("All")):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        if category == "All":
+            c.execute("SELECT * FROM document_history WHERE user_id = ? AND status = 'Active'", (user_id,))
+        else:
+            c.execute("SELECT * FROM document_history WHERE user_id = ? AND category = ? AND status = 'Active'", (user_id, category))
+        rows = c.fetchall()
+
+        if not rows:
+            raise HTTPException(status_code=404, detail="No active files found to export.")
+
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for r in rows:
+                rk = r.keys()
+                disk_path = r["file_path"] if "file_path" in rk and r["file_path"] else os.path.join(
+                    ORGANIZED_DIR, f"user_{user_id}", r["category"], r["filename"]
+                )
+                if os.path.exists(disk_path):
+                    arcname = os.path.join(r["category"], r["filename"]) if category == "All" else r["filename"]
+                    zip_file.write(disk_path, arcname=arcname)
+
+        c.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+        u = c.fetchone()
+        uname = u["username"] if u else f"User_{user_id}"
+
+        c.execute("""
+            INSERT INTO system_logs (timestamp, username, action, details)
+            VALUES (datetime('now'), ?, 'ZIP Archive Export', ?)
+        """, (uname, f"Exported '{category}' folder as ZIP ({len(rows)} files)"))
+        conn.commit()
+
+        zip_buffer.seek(0)
+        safe_cat = category.replace(" ", "_")
+        return StreamingResponse(
+            zip_buffer,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="SmartSorter_{safe_cat}.zip"'}
+        )
+    finally:
+        conn.close()
+
+# ---------------------------------------------------------
+# FEATURE 4: MANUAL CATEGORY OVERRIDE (DB + DISK MOVE)
+# ---------------------------------------------------------
+@app.put("/api/documents/{doc_id}/category")
+def override_document_category(doc_id: int, payload: CategoryOverrideSchema):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        new_cat = payload.new_category.strip()
+        if not new_cat:
+            raise HTTPException(status_code=400, detail="New category cannot be empty.")
+
+        c.execute("SELECT * FROM document_history WHERE id = ?", (doc_id,))
+        doc = c.fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found.")
+
+        old_cat = doc["category"]
+        user_id = doc["user_id"]
+        filename = doc["filename"]
+        rk = doc.keys()
+
+        old_path = doc["file_path"] if "file_path" in rk and doc["file_path"] else os.path.join(
+            ORGANIZED_DIR, f"user_{user_id}", old_cat, filename
+        )
+
+        new_dir = os.path.join(ORGANIZED_DIR, f"user_{user_id}", new_cat)
+        os.makedirs(new_dir, exist_ok=True)
+        new_path = os.path.join(new_dir, filename)
+
+        if os.path.exists(old_path) and old_path != new_path:
+            shutil.move(old_path, new_path)
+
+        c.execute(
+            "UPDATE document_history SET category = ?, file_path = ? WHERE id = ?",
+            (new_cat, new_path, doc_id)
+        )
+
+        c.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+        u = c.fetchone()
+        uname = u["username"] if u else f"User_{user_id}"
+
+        c.execute("""
+            INSERT INTO system_logs (timestamp, username, action, details)
+            VALUES (datetime('now'), ?, 'Category Override', ?)
+        """, (uname, f"Moved '{filename}' from '{old_cat}' to '{new_cat}'"))
+
+        conn.commit()
+        return {"message": f"Moved '{filename}' to {new_cat}", "new_category": new_cat, "file_path": new_path}
+    finally:
+        conn.close()
+
+# ---------------------------------------------------------
+# FEATURE 5: ADMIN AUDIT LOG CSV EXPORT
+# ---------------------------------------------------------
+@app.get("/api/admin/export-audit-csv")
+def export_audit_logs_csv():
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT id, timestamp, username, action, details FROM system_logs ORDER BY id DESC")
+        rows = c.fetchall()
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Log ID", "UTC Timestamp", "Username", "Event Action", "Execution Metadata"])
+
+        for r in rows:
+            writer.writerow([r["id"], r["timestamp"], r["username"], r["action"], r["details"] or ""])
+
+        output.seek(0)
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="SmartSorter_Audit_Log.csv"'}
+        )
+    finally:
+        conn.close()
+
+# ---------------------------------------------------------
+# DOCUMENT DELETION & RESTORATION ENDPOINTS
+# ---------------------------------------------------------
 @app.delete("/api/documents/{doc_id}")
 def delete_document(doc_id: int, permanent: bool = Query(False)):
     conn = get_db()
@@ -574,7 +789,7 @@ def hard_delete_all_documents(user_id: int = Query(...)):
         conn.close()
 
 # ---------------------------------------------------------
-# WORKSPACE METRICS & AUDIT FEED
+# WORKSPACE METRICS & CREATOR ADMIN OVERSIGHT
 # ---------------------------------------------------------
 @app.get("/api/workspace/summary")
 def get_workspace_summary(user_id: int):
@@ -609,9 +824,6 @@ def get_recent_activity(limit: int = 50):
     finally:
         conn.close()
 
-# ---------------------------------------------------------
-# CREATOR ADMIN OVERSIGHT ENDPOINT
-# ---------------------------------------------------------
 @app.get("/api/admin/overview")
 def get_admin_overview():
     conn = get_db()
@@ -683,9 +895,6 @@ def get_admin_overview():
     finally:
         conn.close()
 
-# ---------------------------------------------------------
-# HEALTH CHECK
-# ---------------------------------------------------------
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "app": "SmartSorter", "version": "2.0.0"}
+    return {"status": "ok", "app": "SmartSorter", "version": "3.0.0"}
