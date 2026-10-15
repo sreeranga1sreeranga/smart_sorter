@@ -44,6 +44,16 @@ const STANDARD_CATEGORIES = [
   "Miscellaneous"
 ];
 
+const CATEGORY_COLORS = [
+  "bg-blue-500",
+  "bg-amber-500",
+  "bg-emerald-500",
+  "bg-purple-500",
+  "bg-pink-500",
+  "bg-cyan-400",
+  "bg-rose-500"
+];
+
 const formatTimestamp = (raw) => {
   if (!raw) return "—";
   try {
@@ -103,16 +113,18 @@ export default function App() {
   const [resetOtp, setResetOtp] = useState("");
   const [resetNewPass, setResetNewPass] = useState("");
   const [resetConfirmPass, setResetConfirmPass] = useState("");
-  const [resetStep, setResetStep] = useState(1); // 1: Email, 2: Verify OTP (3-min), 3: Update Password
+  const [resetStep, setResetStep] = useState(1);
   const [otpTimer, setOtpTimer] = useState(0);
 
   // Workspace States
-  const [activeTab, setActiveTab] = useState("library"); // 'library' | 'drive' | 'audit' | 'admin'
+  const [activeTab, setActiveTab] = useState("library");
   const [summary, setSummary] = useState({
     active_files_count: 0,
+    total_storage_kb: 0,
     total_storage_mb: 0,
     storage_limit_mb: 100,
     category_counts: {},
+    category_storage_kb: {},
   });
   const [documents, setDocuments] = useState([]);
   const [activity, setActivity] = useState([]);
@@ -129,12 +141,24 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [selectedFolder, setSelectedFolder] = useState("All");
   const [statusFilter, setStatusFilter] = useState("Active");
+  const [customCategories, setCustomCategories] = useState(() => {
+    try {
+      const saved = localStorage.getItem("sorter_custom_folders");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [uploadNotice, setUploadNotice] = useState("");
 
-  // Modals (Upload & In-App File Preview)
+  // Modals & In-Modal AI Q&A States
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
   const [previewDoc, setPreviewDoc] = useState(null);
+  const [qaQuestion, setQaQuestion] = useState("");
+  const [qaMessages, setQaMessages] = useState([]);
+  const [qaLoading, setQaLoading] = useState(false);
 
   const isCreatorAdmin = currentUser && currentUser.email?.toLowerCase() === CREATOR_EMAIL.toLowerCase();
 
@@ -158,6 +182,19 @@ export default function App() {
       setActiveTab("library");
     }
   }, [isCreatorAdmin, activeTab]);
+
+  // Reset AI Q&A chat when opening a different document
+  useEffect(() => {
+    if (previewDoc) {
+      setQaMessages([
+        {
+          role: "ai",
+          text: `Hi! I'm ready to analyze "${previewDoc.filename}" (${previewDoc.category}). Ask a question below or pick a quick prompt!`
+        }
+      ]);
+      setQaQuestion("");
+    }
+  }, [previewDoc?.id]);
 
   const fetchWorkspace = async () => {
     if (!currentUser) return;
@@ -257,7 +294,6 @@ export default function App() {
     }
   };
 
-  // STEP 1 -> STEP 2: Send OTP & Start 3-Minute Timer
   const handleSendOtp = async (e) => {
     if (e) e.preventDefault();
     if (!resetEmail.trim()) {
@@ -272,9 +308,9 @@ export default function App() {
       const res = await axios.post(`${API_BASE}/auth/request-otp`, { 
         email: resetEmail.trim() 
       });
-      setResetOtp(""); // Keep input empty for user entry
+      setResetOtp("");
       setResetStep(2);
-      setOtpTimer(180); // 3 minutes (180 seconds)
+      setOtpTimer(180);
       setAuthSuccess(res.data.message || "Verification code sent to your email!");
     } catch (err) {
       setAuthError(err.response?.data?.detail || "Failed to dispatch verification code.");
@@ -283,7 +319,6 @@ export default function App() {
     }
   };
 
-  // STEP 2 -> STEP 3: Verify OTP First
   const handleVerifyOtp = async (e) => {
     e.preventDefault();
     if (otpTimer <= 0) {
@@ -312,7 +347,6 @@ export default function App() {
     }
   };
 
-  // STEP 3: Save New Password
   const handleResetPassword = async (e) => {
     e.preventDefault();
     if (resetNewPass !== resetConfirmPass) {
@@ -353,18 +387,67 @@ export default function App() {
     setLoginPassword("");
   };
 
-  // Document & Feature Handlers
-  const handleCategoryChange = async (docId, newCategory) => {
+  // Custom Folder Creation & Category Override
+  const handleCreateCustomFolder = () => {
+    const folderName = window.prompt("Enter a name for your new custom Smart Folder:");
+    if (!folderName || !folderName.trim()) return;
+    const clean = folderName.trim();
+    const updated = Array.from(new Set([...customCategories, clean]));
+    setCustomCategories(updated);
+    localStorage.setItem("sorter_custom_folders", JSON.stringify(updated));
+    setUploadNotice(`Created custom folder "${clean}". You can now move any file into it!`);
+    setTimeout(() => setUploadNotice(""), 4000);
+  };
+
+  const handleCategoryChange = async (docId, selectedValue) => {
+    let targetCategory = selectedValue;
+    if (selectedValue === "__NEW_CUSTOM__") {
+      const custom = window.prompt("Enter custom folder name for this file:");
+      if (!custom || !custom.trim()) return;
+      targetCategory = custom.trim();
+      const updated = Array.from(new Set([...customCategories, targetCategory]));
+      setCustomCategories(updated);
+      localStorage.setItem("sorter_custom_folders", JSON.stringify(updated));
+    }
+
     try {
       await axios.put(`${API_BASE}/documents/${docId}/category`, {
-        new_category: newCategory,
+        new_category: targetCategory,
       });
       if (previewDoc && previewDoc.id === docId) {
-        setPreviewDoc({ ...previewDoc, category: newCategory });
+        setPreviewDoc({ ...previewDoc, category: targetCategory });
       }
       await fetchWorkspace();
     } catch (err) {
       alert("Failed to move category: " + (err.response?.data?.detail || err.message));
+    }
+  };
+
+  // In-Modal AI Document Q&A Handler
+  const handleAskDocument = async (customPrompt = null) => {
+    if (!previewDoc) return;
+    const qText = (customPrompt || qaQuestion).trim();
+    if (!qText) return;
+
+    setQaMessages((prev) => [...prev, { role: "user", text: qText }]);
+    if (!customPrompt) setQaQuestion("");
+    setQaLoading(true);
+
+    try {
+      const res = await axios.post(`${API_BASE}/documents/${previewDoc.id}/ask`, {
+        question: qText,
+      });
+      setQaMessages((prev) => [
+        ...prev,
+        { role: "ai", text: res.data.answer || "No response generated." }
+      ]);
+    } catch (err) {
+      setQaMessages((prev) => [
+        ...prev,
+        { role: "ai", text: "Error analyzing document: " + (err.response?.data?.detail || err.message) }
+      ]);
+    } finally {
+      setQaLoading(false);
     }
   };
 
@@ -448,12 +531,21 @@ export default function App() {
     }
 
     try {
-      await axios.post(`${API_BASE}/documents/upload`, formData, {
+      const res = await axios.post(`${API_BASE}/documents/upload`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       setSelectedFiles([]);
       setUploadModalOpen(false);
       await fetchWorkspace();
+
+      const skipped = res.data.skipped_duplicates || [];
+      if (skipped.length > 0) {
+        const names = skipped.map((s) => `${s.filename} (matches ${s.matched_with})`).join(", ");
+        setUploadNotice(`🛡️ SHA-256 Duplicate Protection: Skipped ${skipped.length} duplicate file(s): ${names}`);
+      } else {
+        setUploadNotice(`✅ Successfully classified & indexed ${res.data.files?.length || 0} file(s)!`);
+      }
+      setTimeout(() => setUploadNotice(""), 6000);
     } catch (err) {
       console.error("Upload failed:", err);
       const detail = err.response?.data?.detail || err.message || "Upload request failed";
@@ -474,8 +566,17 @@ export default function App() {
   };
 
   const allCategoryOptions = Array.from(
-    new Set([...STANDARD_CATEGORIES, ...Object.keys(summary.category_counts || {})])
+    new Set([
+      ...STANDARD_CATEGORIES,
+      ...customCategories,
+      ...Object.keys(summary.category_counts || {})
+    ])
   );
+
+  // Merge active categories with user-created empty custom folders for display
+  const folderEntries = Array.from(
+    new Set([...Object.keys(summary.category_counts || {}), ...customCategories])
+  ).map((cat) => [cat, summary.category_counts?.[cat] || 0]);
 
   // VIEW 1: AUTH PORTAL
   if (!currentUser) {
@@ -499,7 +600,7 @@ export default function App() {
             <p className="mt-1 text-xs text-slate-400">
               {portalMode === "admin" 
                 ? "Dedicated security access for noragamiarota@gmail.com" 
-                : "Intelligent Multimodal File Workspace"}
+                : "Intelligent Multimodal File Workspace v4.0"}
             </p>
           </div>
 
@@ -720,7 +821,6 @@ export default function App() {
 
           {portalMode === "reset" && (
             <div className="space-y-4">
-              {/* STEP 1: REQUEST OTP */}
               {resetStep === 1 && (
                 <form onSubmit={handleSendOtp} className="space-y-4">
                   <div>
@@ -748,7 +848,6 @@ export default function App() {
                 </form>
               )}
 
-              {/* STEP 2: ENTER & VERIFY OTP WITHIN 3 MINUTES */}
               {resetStep === 2 && (
                 <form onSubmit={handleVerifyOtp} className="space-y-4">
                   <div className="flex items-center justify-between rounded-xl bg-slate-900/90 border border-white/10 px-3.5 py-2 text-xs">
@@ -802,7 +901,6 @@ export default function App() {
                 </form>
               )}
 
-              {/* STEP 3: UPDATE NEW PASSWORD (AFTER OTP VERIFIED) */}
               {resetStep === 3 && (
                 <form onSubmit={handleResetPassword} className="space-y-4">
                   <div>
@@ -876,6 +974,9 @@ export default function App() {
     selectedFolder === "All" || d.category === selectedFolder
   );
 
+  const totalStorageKb = summary.total_storage_kb || 1;
+  const storageSegments = Object.entries(summary.category_storage_kb || {});
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#0d131f] text-slate-100 font-sans">
       
@@ -891,7 +992,7 @@ export default function App() {
             <div>
               <h1 className="font-bold text-base leading-tight">SmartSorter</h1>
               <p className="text-xs text-slate-500 font-medium">
-                {isCreatorAdmin ? "Creator Oversight" : "Workspace SaaS"}
+                {isCreatorAdmin ? "Creator Oversight" : "Workspace SaaS v4.0"}
               </p>
             </div>
           </div>
@@ -943,21 +1044,51 @@ export default function App() {
           </nav>
         </div>
 
+        {/* UPGRADE 4: VISUAL STORAGE DISTRIBUTION BAR */}
         <div className="space-y-4">
           <div className="bg-slate-900/80 border border-white/5 p-3.5 rounded-xl">
             <div className="flex justify-between text-xs font-semibold mb-2">
-              <span className="text-slate-400">Storage Used</span>
+              <span className="text-slate-400">Storage Distribution</span>
               <span className={isCreatorAdmin ? "text-amber-400" : "text-blue-400"}>{percentUsed}%</span>
             </div>
-            <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden mb-2">
-              <div 
-                className={`h-full rounded-full transition-all duration-300 ${isCreatorAdmin ? "bg-amber-500" : "bg-blue-500"}`}
-                style={{ width: `${percentUsed}%` }}
-              />
+
+            {/* Multi-segment category bar */}
+            <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden flex mb-2">
+              {storageSegments.length > 0 ? (
+                storageSegments.map(([cat, kb], idx) => {
+                  const segPct = Math.max(Math.round((kb / totalStorageKb) * 100), 5);
+                  const colorClass = CATEGORY_COLORS[idx % CATEGORY_COLORS.length];
+                  return (
+                    <div
+                      key={cat}
+                      title={`${cat}: ${kb} KB`}
+                      className={`h-full ${colorClass} transition-all duration-300`}
+                      style={{ width: `${segPct}%` }}
+                    />
+                  );
+                })
+              ) : (
+                <div className="h-full bg-blue-500/30 w-0" />
+              )}
             </div>
-            <p className="text-[11px] text-slate-500 font-medium">
-              {summary.total_storage_mb} MB of {summary.storage_limit_mb} MB
+
+            <p className="text-[11px] text-slate-400 font-medium mb-2">
+              {summary.total_storage_mb} MB of {summary.storage_limit_mb} MB ({summary.active_files_count} files)
             </p>
+
+            {storageSegments.length > 0 && (
+              <div className="space-y-1 pt-1.5 border-t border-white/5 max-h-24 overflow-y-auto">
+                {storageSegments.map(([cat, kb], idx) => (
+                  <div key={cat} className="flex items-center justify-between text-[10px] text-slate-400">
+                    <div className="flex items-center gap-1.5 truncate">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${CATEGORY_COLORS[idx % CATEGORY_COLORS.length]}`} />
+                      <span className="truncate">{cat}</span>
+                    </div>
+                    <span className="font-mono text-slate-500">{kb} KB</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="flex items-center justify-between p-2.5 rounded-xl bg-white/[0.02] border border-white/5">
@@ -1000,6 +1131,15 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2.5">
+            <button
+              onClick={handleCreateCustomFolder}
+              title="Create a Custom Smart Folder"
+              className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold border border-white/10 transition"
+            >
+              <Plus className="w-3.5 h-3.5 text-emerald-400" />
+              <span>New Folder</span>
+            </button>
+
             {summary.active_files_count > 0 && (
               <button
                 onClick={(e) => handleExportFolderZip("All", e)}
@@ -1027,13 +1167,23 @@ export default function App() {
           </div>
         </header>
 
+        {/* SHA-256 Duplicate / Action Banner */}
+        {uploadNotice && (
+          <div className="mt-4 flex items-center justify-between rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-2.5 text-xs text-blue-300">
+            <span>{uploadNotice}</span>
+            <button onClick={() => setUploadNotice("")} className="text-slate-400 hover:text-white">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* TAB 1: MAIN LIBRARY */}
         {activeTab === "library" && (
           <div className="mt-6">
             <div className="mb-4 flex items-baseline justify-between">
               <div>
                 <h2 className="text-xl font-bold tracking-tight">Main Library</h2>
-                <p className="text-xs text-slate-400 mt-0.5">Click any folder to filter, export a folder as ZIP, or click a file to preview</p>
+                <p className="text-xs text-slate-400 mt-0.5">Filter by folder, download ZIP bundles, or click any file for AI Q&A & preview</p>
               </div>
               <span className="text-xs text-slate-500">{displayedDocs.length} items visible</span>
             </div>
@@ -1041,8 +1191,8 @@ export default function App() {
             <div className="mb-8">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Smart Folders</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
-                {Object.keys(summary.category_counts).length > 0 ? (
-                  Object.entries(summary.category_counts).map(([cat, count]) => (
+                {folderEntries.length > 0 ? (
+                  folderEntries.map(([cat, count]) => (
                     <div
                       key={cat}
                       onClick={() => setSelectedFolder(selectedFolder === cat ? "All" : cat)}
@@ -1057,14 +1207,16 @@ export default function App() {
                         <span className="text-xs font-semibold text-amber-200 truncate">{cat}</span>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={(e) => handleExportFolderZip(cat, e)}
-                          title={`Download '${cat}' folder as .zip`}
-                          className="p-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/30 text-amber-300 transition"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                        </button>
+                        {count > 0 && (
+                          <button
+                            type="button"
+                            onClick={(e) => handleExportFolderZip(cat, e)}
+                            title={`Download '${cat}' folder as .zip`}
+                            className="p-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/30 text-amber-300 transition"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300">
                           {count}
                         </span>
@@ -1072,7 +1224,7 @@ export default function App() {
                     </div>
                   ))
                 ) : (
-                  <p className="text-xs text-slate-500 italic col-span-4">Upload documents to generate smart folders.</p>
+                  <p className="text-xs text-slate-500 italic col-span-4">Upload documents or click "+ New Folder" to generate smart folders.</p>
                 )}
               </div>
             </div>
@@ -1087,12 +1239,11 @@ export default function App() {
                       onClick={() => setPreviewDoc(doc)}
                       className="bg-[#151d2c] border border-white/5 hover:border-blue-500/40 rounded-xl p-4 flex flex-col items-center text-center transition group hover:-translate-y-1 shadow-sm relative cursor-pointer"
                     >
-                      {/* Hover Quick Actions (Preview & Download) */}
                       <div className="absolute top-2.5 right-2.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
                         <button
                           type="button"
                           onClick={(e) => { e.stopPropagation(); setPreviewDoc(doc); }}
-                          title="Preview Document"
+                          title="Preview & Ask Gemini"
                           className="p-1.5 rounded-lg bg-slate-900/90 hover:bg-blue-600 text-slate-300 hover:text-white border border-white/10"
                         >
                           <Eye className="w-3.5 h-3.5" />
@@ -1140,7 +1291,7 @@ export default function App() {
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 className="text-xl font-bold tracking-tight">Drive File Catalog</h2>
-                <p className="text-xs text-slate-400 mt-0.5">Preview, download, override AI folder categories, or manage trash</p>
+                <p className="text-xs text-slate-400 mt-0.5">Preview, download, move to custom folders, or verify SHA-256 integrity</p>
               </div>
 
               <div className="flex items-center gap-3">
@@ -1179,8 +1330,8 @@ export default function App() {
                 <thead className="bg-slate-900/60 text-slate-400 uppercase text-[10px] tracking-wider border-b border-white/5">
                   <tr>
                     <th className="py-3 px-4">Document & AI Summary</th>
-                    <th className="py-3 px-4">Category (Override)</th>
-                    <th className="py-3 px-4">Size</th>
+                    <th className="py-3 px-4">Folder (Override)</th>
+                    <th className="py-3 px-4">Size / Hash</th>
                     <th className="py-3 px-4">Status</th>
                     <th className="py-3 px-4">Processed Date</th>
                     <th className="py-3 px-4 text-right">Actions</th>
@@ -1209,9 +1360,17 @@ export default function App() {
                                 {catOpt}
                               </option>
                             ))}
+                            <option value="__NEW_CUSTOM__">+ New Custom Folder...</option>
                           </select>
                         </td>
-                        <td className="py-3 px-4 text-slate-400 whitespace-nowrap">{d.size_kb} KB</td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <p className="text-slate-300">{d.size_kb} KB</p>
+                          {d.file_hash && (
+                            <p className="text-[10px] font-mono text-slate-500" title="SHA-256 Checksum">
+                              #{d.file_hash}
+                            </p>
+                          )}
+                        </td>
                         <td className="py-3 px-4">
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                             d.status === "Active" ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400"
@@ -1227,7 +1386,7 @@ export default function App() {
                           <div className="flex items-center justify-end gap-1.5">
                             <button
                               onClick={() => setPreviewDoc(d)}
-                              title="Preview File"
+                              title="Preview & Ask Gemini"
                               className="p-1.5 rounded-lg bg-white/5 hover:bg-blue-500/20 text-slate-400 hover:text-blue-400 transition"
                             >
                               <Eye className="w-3.5 h-3.5" />
@@ -1499,7 +1658,9 @@ export default function App() {
             </button>
 
             <h3 className="text-base font-bold mb-1">Upload Documents</h3>
-            <p className="text-xs text-slate-400 mb-4">Gemini Flash categorizes and generates a 1-line summary for each file.</p>
+            <p className="text-xs text-slate-400 mb-4">
+              Gemini Flash classifies, summarizes, and checks SHA-256 hashes to prevent duplicates.
+            </p>
 
             <form onSubmit={handleUploadSubmit}>
               <div className="border-2 border-dashed border-white/10 hover:border-blue-500/50 rounded-xl p-6 text-center cursor-pointer mb-4">
@@ -1527,23 +1688,30 @@ export default function App() {
                 disabled={isUploading || selectedFiles.length === 0}
                 className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white rounded-xl text-xs font-semibold transition"
               >
-                {isUploading ? "Classifying & Summarizing..." : `Process ${selectedFiles.length} File(s)`}
+                {isUploading ? "Classifying & Verifying SHA-256..." : `Process ${selectedFiles.length} File(s)`}
               </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* MODAL 2: IN-BROWSER DOCUMENT PREVIEW & DETAILS */}
+      {/* MODAL 2: SPLIT-SCREEN DOCUMENT PREVIEW + "ASK GEMINI" Q&A */}
       {previewDoc && (
         <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#111827] border border-white/10 rounded-2xl w-full max-w-4xl h-[82vh] flex flex-col shadow-2xl overflow-hidden">
+          <div className="bg-[#111827] border border-white/10 rounded-2xl w-full max-w-6xl h-[85vh] flex flex-col shadow-2xl overflow-hidden">
             {/* Modal Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-[#151d2c]">
               <div className="flex items-center gap-3 overflow-hidden">
                 {getFileIcon(previewDoc.filename)}
                 <div className="overflow-hidden">
-                  <h3 className="text-sm font-bold text-white truncate">{previewDoc.filename}</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-white truncate">{previewDoc.filename}</h3>
+                    {previewDoc.file_hash && (
+                      <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-mono text-emerald-400">
+                        SHA-256 #{previewDoc.file_hash}
+                      </span>
+                    )}
+                  </div>
                   <p className="text-[11px] text-slate-400 truncate">
                     {previewDoc.summary || `Classified under ${previewDoc.category}`}
                   </p>
@@ -1561,6 +1729,7 @@ export default function App() {
                       {catOpt}
                     </option>
                   ))}
+                  <option value="__NEW_CUSTOM__">+ New Custom Folder...</option>
                 </select>
 
                 <button
@@ -1588,23 +1757,106 @@ export default function App() {
               </div>
             </div>
 
-            {/* Modal Body / Live File Frame */}
-            <div className="flex-1 bg-slate-950 flex items-center justify-center overflow-hidden p-4">
-              {["png", "jpg", "jpeg", "webp", "gif", "svg"].includes(
-                previewDoc.filename.split(".").pop().toLowerCase()
-              ) ? (
-                <img
-                  src={`${API_BASE}/documents/${previewDoc.id}/file?download=false`}
-                  alt={previewDoc.filename}
-                  className="max-h-full max-w-full object-contain rounded-lg shadow-lg"
-                />
-              ) : (
-                <iframe
-                  title={previewDoc.filename}
-                  src={`${API_BASE}/documents/${previewDoc.id}/file?download=false`}
-                  className="w-full h-full rounded-lg border border-white/10 bg-white"
-                />
-              )}
+            {/* Split Body: Left Preview (2/3) + Right Ask Gemini Chat (1/3) */}
+            <div className="flex-1 flex overflow-hidden">
+              {/* Left Document Viewer */}
+              <div className="flex-1 bg-slate-950 flex items-center justify-center overflow-hidden p-4">
+                {["png", "jpg", "jpeg", "webp", "gif", "svg"].includes(
+                  previewDoc.filename.split(".").pop().toLowerCase()
+                ) ? (
+                  <img
+                    src={`${API_BASE}/documents/${previewDoc.id}/file?download=false`}
+                    alt={previewDoc.filename}
+                    className="max-h-full max-w-full object-contain rounded-lg shadow-lg"
+                  />
+                ) : (
+                  <iframe
+                    title={previewDoc.filename}
+                    src={`${API_BASE}/documents/${previewDoc.id}/file?download=false`}
+                    className="w-full h-full rounded-lg border border-white/10 bg-white"
+                  />
+                )}
+              </div>
+
+              {/* Right "Ask Gemini" Document Q&A Sidebar */}
+              <div className="w-80 md:w-96 border-l border-white/10 bg-[#131b2e] flex flex-col justify-between p-4 shrink-0">
+                <div className="pb-3 border-b border-white/10">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-blue-400 flex items-center gap-1.5">
+                    <span>✨ Ask Gemini AI</span>
+                  </h4>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Interactive Q&A and study quiz generator for this file
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 mt-2.5">
+                    <button
+                      type="button"
+                      onClick={() => handleAskDocument("Summarize the key points of this document.")}
+                      className="text-[10px] px-2.5 py-1 rounded-lg bg-blue-500/15 hover:bg-blue-500/30 text-blue-300 border border-blue-500/20 transition"
+                    >
+                      📄 Summarize
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleAskDocument("Generate 3 study quiz questions from this file.")}
+                      className="text-[10px] px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/30 text-amber-300 border border-amber-500/20 transition"
+                    >
+                      📝 Quiz Me
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleAskDocument("Explain the core concepts and structure of this file.")}
+                      className="text-[10px] px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/20 transition"
+                    >
+                      💡 Explain
+                    </button>
+                  </div>
+                </div>
+
+                {/* Chat History */}
+                <div className="flex-1 overflow-y-auto space-y-3 py-3 pr-1">
+                  {qaMessages.map((m, idx) => (
+                    <div
+                      key={idx}
+                      className={`p-3 rounded-xl text-xs whitespace-pre-wrap leading-relaxed ${
+                        m.role === "user"
+                          ? "bg-blue-600 text-white ml-6"
+                          : "bg-slate-900/90 border border-white/10 text-slate-200 mr-2"
+                      }`}
+                    >
+                      {m.text}
+                    </div>
+                  ))}
+                  {qaLoading && (
+                    <div className="p-3 rounded-xl bg-slate-900/60 border border-white/5 text-xs text-blue-400 italic animate-pulse">
+                      Gemini is analyzing document...
+                    </div>
+                  )}
+                </div>
+
+                {/* Question Input Box */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleAskDocument();
+                  }}
+                  className="pt-2 border-t border-white/10 flex gap-2"
+                >
+                  <input
+                    type="text"
+                    value={qaQuestion}
+                    onChange={(e) => setQaQuestion(e.target.value)}
+                    placeholder="Ask about this document..."
+                    className="flex-1 rounded-xl bg-slate-900 border border-white/10 px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={qaLoading || !qaQuestion.trim()}
+                    className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white rounded-xl text-xs font-semibold transition"
+                  >
+                    Ask
+                  </button>
+                </form>
+              </div>
             </div>
           </div>
         </div>

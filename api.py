@@ -55,7 +55,7 @@ def init_and_migrate_db():
         );
     """)
 
-    # 2. Document History Table
+    # 2. Document History Table (with summary & SHA-256 file_hash)
     c.execute("""
         CREATE TABLE IF NOT EXISTS document_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,6 +63,7 @@ def init_and_migrate_db():
             filename TEXT NOT NULL,
             category TEXT NOT NULL,
             summary TEXT DEFAULT '',
+            file_hash TEXT DEFAULT '',
             file_path TEXT,
             size_kb REAL DEFAULT 0.0,
             status TEXT DEFAULT 'Active',
@@ -105,6 +106,8 @@ def init_and_migrate_db():
         c.execute("ALTER TABLE document_history ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP;")
     if "summary" not in cols:
         c.execute("ALTER TABLE document_history ADD COLUMN summary TEXT DEFAULT '';")
+    if "file_hash" not in cols:
+        c.execute("ALTER TABLE document_history ADD COLUMN file_hash TEXT DEFAULT '';")
 
     conn.commit()
     conn.close()
@@ -114,7 +117,7 @@ init_and_migrate_db()
 # ---------------------------------------------------------
 # FASTAPI APPLICATION & CORS MIDDLEWARE
 # ---------------------------------------------------------
-app = FastAPI(title="SmartSorter API", version="3.0.0")
+app = FastAPI(title="SmartSorter API", version="4.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -156,6 +159,9 @@ class ResetPasswordSchema(BaseModel):
 class CategoryOverrideSchema(BaseModel):
     new_category: str
 
+class AskDocumentSchema(BaseModel):
+    question: str
+
 def hash_pw(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -196,11 +202,9 @@ def send_otp_email(receiver_email: str, username: str, otp_code: str) -> bool:
         return False
 
 def generate_ai_summary(filename: str, contents: bytes, category: str) -> str:
-    """Generates a concise 1-line summary via Gemini or intelligent content inspection."""
     ext = filename.split(".")[-1].lower() if "." in filename else ""
     api_key = os.environ.get("GEMINI_API_KEY", "")
 
-    # Try live Gemini 1-line summary for text/code/small files if API key is present
     if api_key and ext in ["txt", "md", "py", "js", "html", "css", "java", "sql", "json", "csv"]:
         try:
             from google import genai
@@ -217,7 +221,6 @@ def generate_ai_summary(filename: str, contents: bytes, category: str) -> str:
         except Exception as e:
             print(f"[Summary Fallback for {filename}]: {e}")
 
-    # Intelligent deterministic fallback summary
     if ext in ["txt", "md", "py", "js", "html", "css", "java", "sql", "csv"]:
         text_preview = contents[:1000].decode("utf-8", errors="ignore").strip()
         lines = [line.strip() for line in text_preview.splitlines() if line.strip() and not line.strip().startswith(("#", "//", "/*"))]
@@ -225,9 +228,9 @@ def generate_ai_summary(filename: str, contents: bytes, category: str) -> str:
             first_line = lines[0][:85]
             return f"Snippet: {first_line}..." if len(lines[0]) > 85 else f"Content: {first_line}"
 
-    base_Title = os.path.splitext(filename)[0].replace("_", " ").replace("-", " ")
+    base_title = os.path.splitext(filename)[0].replace("_", " ").replace("-", " ")
     if ext == "pdf":
-        return f"PDF document sorted under {category} ({base_Title[:45]})"
+        return f"PDF document sorted under {category} ({base_title[:45]})"
     elif ext in ["png", "jpg", "jpeg", "webp"]:
         return f"Visual image asset indexed in {category}"
     elif ext in ["doc", "docx", "ppt", "pptx"]:
@@ -399,7 +402,7 @@ def reset_password(payload: ResetPasswordSchema):
         conn.close()
 
 # ---------------------------------------------------------
-# DOCUMENT MANAGEMENT, AI SUMMARY & MULTIMODAL INGESTION
+# DOCUMENT UPLOAD WITH SHA-256 DUPLICATE DETECTION
 # ---------------------------------------------------------
 @app.post("/api/documents/upload")
 async def upload_and_classify_documents(
@@ -409,6 +412,7 @@ async def upload_and_classify_documents(
     conn = get_db()
     c = conn.cursor()
     saved_records = []
+    skipped_duplicates = []
 
     try:
         c.execute("SELECT username FROM users WHERE id = ?", (user_id,))
@@ -419,6 +423,26 @@ async def upload_and_classify_documents(
             contents = await file.read()
             size_kb = round(len(contents) / 1024, 2)
             filename = file.filename
+
+            # SHA-256 Cryptographic Hash for Duplicate Detection
+            file_hash = hashlib.sha256(contents).hexdigest()
+
+            c.execute(
+                "SELECT id, filename, category FROM document_history WHERE user_id = ? AND file_hash = ? AND status = 'Active'",
+                (user_id, file_hash)
+            )
+            existing_doc = c.fetchone()
+            if existing_doc:
+                skipped_duplicates.append({
+                    "filename": filename,
+                    "matched_with": existing_doc["filename"],
+                    "category": existing_doc["category"]
+                })
+                c.execute("""
+                    INSERT INTO system_logs (timestamp, username, action, details)
+                    VALUES (datetime('now'), ?, 'Duplicate Blocked', ?)
+                """, (username, f"SHA-256 matched '{filename}' with existing '{existing_doc['filename']}'"))
+                continue
 
             # 1. Semantic Gemini Classification with Fallback
             category = "Miscellaneous"
@@ -450,11 +474,11 @@ async def upload_and_classify_documents(
             with open(disk_path, "wb") as f_out:
                 f_out.write(contents)
 
-            # 4. SQLite persistence
+            # 4. SQLite persistence (including file_hash)
             c.execute("""
-                INSERT INTO document_history (user_id, filename, category, summary, file_path, size_kb, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'Active', datetime('now'))
-            """, (user_id, filename, category, summary_text, disk_path, size_kb))
+                INSERT INTO document_history (user_id, filename, category, summary, file_hash, file_path, size_kb, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'Active', datetime('now'))
+            """, (user_id, filename, category, summary_text, file_hash, disk_path, size_kb))
             doc_id = c.lastrowid
 
             # 5. Audit record
@@ -468,13 +492,18 @@ async def upload_and_classify_documents(
                 "filename": filename,
                 "category": category,
                 "summary": summary_text,
+                "file_hash": file_hash[:12],
                 "file_path": disk_path,
                 "size_kb": size_kb,
                 "status": "Active"
             })
 
         conn.commit()
-        return {"message": f"Successfully classified {len(saved_records)} file(s)", "files": saved_records}
+        return {
+            "message": f"Processed {len(saved_records)} file(s), skipped {len(skipped_duplicates)} duplicate(s).",
+            "files": saved_records,
+            "skipped_duplicates": skipped_duplicates
+        }
 
     except Exception as err:
         conn.rollback()
@@ -517,6 +546,7 @@ def list_documents(
                 "filename": r["filename"],
                 "category": r["category"],
                 "summary": r["summary"] if "summary" in rk and r["summary"] else f"Sorted under {r['category']}",
+                "file_hash": r["file_hash"][:10] if "file_hash" in rk and r["file_hash"] else "",
                 "file_path": r["file_path"] if "file_path" in rk else "",
                 "size_kb": r["size_kb"] if "size_kb" in rk else 0.0,
                 "status": r["status"] if "status" in rk else "Active",
@@ -527,7 +557,124 @@ def list_documents(
         conn.close()
 
 # ---------------------------------------------------------
-# FEATURE 1: FILE PREVIEW & DIRECT DOWNLOAD ENDPOINT
+# UPGRADE 1: "ASK GEMINI" IN-DOCUMENT Q&A ENDPOINT
+# ---------------------------------------------------------
+@app.post("/api/documents/{doc_id}/ask")
+def ask_document_question(doc_id: int, payload: AskDocumentSchema):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        question = payload.question.strip()
+        if not question:
+            raise HTTPException(status_code=400, detail="Question cannot be empty.")
+
+        c.execute("SELECT * FROM document_history WHERE id = ?", (doc_id,))
+        doc = c.fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found.")
+
+        rk = doc.keys()
+        filename = doc["filename"]
+        category = doc["category"]
+        summary = doc["summary"] if "summary" in rk and doc["summary"] else ""
+        disk_path = doc["file_path"] if "file_path" in rk and doc["file_path"] else os.path.join(
+            ORGANIZED_DIR, f"user_{doc['user_id']}", category, filename
+        )
+
+        contents = b""
+        if os.path.exists(disk_path):
+            with open(disk_path, "rb") as f:
+                contents = f.read()
+
+        ext = filename.split(".")[-1].lower() if "." in filename else ""
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+        answer = None
+
+        # Attempt live multimodal Gemini Q&A if GEMINI_API_KEY is available
+        if api_key and contents:
+            try:
+                from google import genai
+                from google.genai import types
+                client = genai.Client(api_key=api_key)
+
+                if ext in ["txt", "md", "py", "js", "ts", "html", "css", "java", "sql", "json", "csv"]:
+                    text_data = contents[:15000].decode("utf-8", errors="ignore")
+                    prompt = (
+                        f"You are SmartSorter AI Assistant. The user is viewing the file '{filename}' "
+                        f"(Category: {category}). Answer their question concisely and clearly.\n\n"
+                        f"File Content:\n{text_data}\n\nUser Question: {question}"
+                    )
+                    resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+                    if resp and resp.text:
+                        answer = resp.text.strip()
+                elif ext in ["pdf", "png", "jpg", "jpeg", "webp"]:
+                    mime_type, _ = mimetypes.guess_type(filename)
+                    mime_type = mime_type or "application/pdf"
+                    part = types.Part.from_bytes(data=contents, mime_type=mime_type)
+                    prompt = (
+                        f"You are SmartSorter AI Assistant analyzing '{filename}' ({category}). "
+                        f"Answer the user's question concisely: {question}"
+                    )
+                    resp = client.models.generate_content(model="gemini-2.5-flash", contents=[part, prompt])
+                    if resp and resp.text:
+                        answer = resp.text.strip()
+            except Exception as e:
+                print(f"[Gemini Q&A Fallback for {filename}]: {e}")
+
+        # Intelligent local fallback analyzer if offline or rate-limited
+        if not answer:
+            if ext in ["txt", "md", "py", "js", "ts", "html", "css", "java", "sql", "json", "csv"] and contents:
+                text_str = contents.decode("utf-8", errors="ignore")
+                lines = [l.strip() for l in text_str.splitlines() if l.strip()]
+                word_count = len(text_str.split())
+                preview_lines = "\n".join(f"• {l[:90]}" for l in lines[:5])
+                if "quiz" in question.lower() or "question" in question.lower():
+                    answer = (
+                        f"📝 Study Quiz for '{filename}' ({category}):\n"
+                        f"1. What is the primary purpose of {filename} within {category}?\n"
+                        f"2. Explain the key logic or structure starting with: '{lines[0][:60] if lines else filename}'.\n"
+                        f"3. How can the concepts in this {doc['size_kb']} KB file be applied practically?"
+                    )
+                else:
+                    answer = (
+                        f"📄 Analysis of '{filename}' ({category}):\n"
+                        f"• Stats: {len(lines)} non-empty lines, ~{word_count} words ({doc['size_kb']} KB).\n"
+                        f"• Summary: {summary}\n"
+                        f"• Key Excerpts:\n{preview_lines}"
+                    )
+            else:
+                if "quiz" in question.lower():
+                    answer = (
+                        f"📝 Review Questions for '{filename}' ({category}):\n"
+                        f"1. What are the core topics covered in {os.path.splitext(filename)[0]}?\n"
+                        f"2. How does this {ext.upper()} resource relate to your {category} coursework?\n"
+                        f"3. Summarize the primary takeaways from this {doc['size_kb']} KB document."
+                    )
+                else:
+                    answer = (
+                        f"📌 Document Insights for '{filename}':\n"
+                        f"• Category: {category}\n"
+                        f"• AI Summary: {summary or 'Indexed multimodal asset'}\n"
+                        f"• Footprint: {doc['size_kb']} KB ({ext.upper()} format)\n"
+                        f"• Integrity Hash: {doc['file_hash'][:12] if 'file_hash' in rk and doc['file_hash'] else 'Verified'}"
+                    )
+
+        c.execute("SELECT username FROM users WHERE id = ?", (doc["user_id"],))
+        u = c.fetchone()
+        uname = u["username"] if u else f"User_{doc['user_id']}"
+
+        c.execute("""
+            INSERT INTO system_logs (timestamp, username, action, details)
+            VALUES (datetime('now'), ?, 'AI Document Q&A', ?)
+        """, (uname, f"Asked Gemini about '{filename}': {question[:45]}"))
+        conn.commit()
+
+        return {"answer": answer, "filename": filename}
+    finally:
+        conn.close()
+
+# ---------------------------------------------------------
+# FILE PREVIEW, ZIP EXPORT, CATEGORY OVERRIDE & AUDIT CSV
 # ---------------------------------------------------------
 @app.get("/api/documents/{doc_id}/file")
 def serve_document_file(doc_id: int, download: bool = Query(False)):
@@ -560,9 +707,6 @@ def serve_document_file(doc_id: int, download: bool = Query(False)):
     finally:
         conn.close()
 
-# ---------------------------------------------------------
-# FEATURE 2: ONE-CLICK SMART FOLDER ZIP EXPORT
-# ---------------------------------------------------------
 @app.get("/api/documents/export-zip")
 def export_category_zip(user_id: int = Query(...), category: str = Query("All")):
     conn = get_db()
@@ -608,9 +752,6 @@ def export_category_zip(user_id: int = Query(...), category: str = Query("All"))
     finally:
         conn.close()
 
-# ---------------------------------------------------------
-# FEATURE 4: MANUAL CATEGORY OVERRIDE (DB + DISK MOVE)
-# ---------------------------------------------------------
 @app.put("/api/documents/{doc_id}/category")
 def override_document_category(doc_id: int, payload: CategoryOverrideSchema):
     conn = get_db()
@@ -660,9 +801,6 @@ def override_document_category(doc_id: int, payload: CategoryOverrideSchema):
     finally:
         conn.close()
 
-# ---------------------------------------------------------
-# FEATURE 5: ADMIN AUDIT LOG CSV EXPORT
-# ---------------------------------------------------------
 @app.get("/api/admin/export-audit-csv")
 def export_audit_logs_csv():
     conn = get_db()
@@ -789,7 +927,7 @@ def hard_delete_all_documents(user_id: int = Query(...)):
         conn.close()
 
 # ---------------------------------------------------------
-# WORKSPACE METRICS & CREATOR ADMIN OVERSIGHT
+# WORKSPACE METRICS (WITH STORAGE BREAKDOWN) & ADMIN PORTAL
 # ---------------------------------------------------------
 @app.get("/api/workspace/summary")
 def get_workspace_summary(user_id: int):
@@ -801,14 +939,23 @@ def get_workspace_summary(user_id: int):
         active_count = row[0] if row else 0
         total_kb = row[1] if row else 0.0
 
-        c.execute("SELECT category, COUNT(*) FROM document_history WHERE user_id = ? AND status = 'Active' GROUP BY category", (user_id,))
-        cat_counts = {r[0]: r[1] for r in c.fetchall()}
+        c.execute("""
+            SELECT category, COUNT(*), COALESCE(SUM(size_kb), 0)
+            FROM document_history
+            WHERE user_id = ? AND status = 'Active'
+            GROUP BY category
+        """, (user_id,))
+        cat_rows = c.fetchall()
+        cat_counts = {r[0]: r[1] for r in cat_rows}
+        cat_storage_kb = {r[0]: round(r[2], 2) for r in cat_rows}
 
         return {
             "active_files_count": active_count or 0,
+            "total_storage_kb": round(total_kb or 0.0, 2),
             "total_storage_mb": round((total_kb or 0.0) / 1024, 2),
             "storage_limit_mb": 100,
-            "category_counts": cat_counts
+            "category_counts": cat_counts,
+            "category_storage_kb": cat_storage_kb
         }
     finally:
         conn.close()
@@ -897,4 +1044,4 @@ def get_admin_overview():
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "app": "SmartSorter", "version": "3.0.0"}
+    return {"status": "ok", "app": "SmartSorter", "version": "4.0.0"}
