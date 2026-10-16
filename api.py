@@ -4,6 +4,7 @@ import csv
 import shutil
 import sqlite3
 import random
+import secrets
 import hashlib
 import zipfile
 import mimetypes
@@ -51,11 +52,12 @@ def init_and_migrate_db():
             username TEXT NOT NULL,
             email TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
-            role TEXT DEFAULT 'user'
+            role TEXT DEFAULT 'user',
+            account_status TEXT DEFAULT 'Active'
         );
     """)
 
-    # 2. Document History Table (with summary & SHA-256 file_hash)
+    # 2. Document History Table
     c.execute("""
         CREATE TABLE IF NOT EXISTS document_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,6 +68,8 @@ def init_and_migrate_db():
             file_hash TEXT DEFAULT '',
             file_path TEXT,
             size_kb REAL DEFAULT 0.0,
+            is_starred INTEGER DEFAULT 0,
+            share_token TEXT DEFAULT '',
             status TEXT DEFAULT 'Active',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (id)
@@ -93,21 +97,31 @@ def init_and_migrate_db():
         );
     """)
 
-    # Migration Safety: Ensure all columns exist in document_history
+    # Migration Safety: Users table columns
+    c.execute("PRAGMA table_info(users);")
+    user_cols = [col["name"] for col in c.fetchall()]
+    if "account_status" not in user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN account_status TEXT DEFAULT 'Active';")
+
+    # Migration Safety: Document History table columns
     c.execute("PRAGMA table_info(document_history);")
-    cols = [col["name"] for col in c.fetchall()]
-    if "file_path" not in cols:
+    doc_cols = [col["name"] for col in c.fetchall()]
+    if "file_path" not in doc_cols:
         c.execute("ALTER TABLE document_history ADD COLUMN file_path TEXT DEFAULT '';")
-    if "size_kb" not in cols:
+    if "size_kb" not in doc_cols:
         c.execute("ALTER TABLE document_history ADD COLUMN size_kb REAL DEFAULT 0.0;")
-    if "status" not in cols:
+    if "status" not in doc_cols:
         c.execute("ALTER TABLE document_history ADD COLUMN status TEXT DEFAULT 'Active';")
-    if "created_at" not in cols:
+    if "created_at" not in doc_cols:
         c.execute("ALTER TABLE document_history ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP;")
-    if "summary" not in cols:
+    if "summary" not in doc_cols:
         c.execute("ALTER TABLE document_history ADD COLUMN summary TEXT DEFAULT '';")
-    if "file_hash" not in cols:
+    if "file_hash" not in doc_cols:
         c.execute("ALTER TABLE document_history ADD COLUMN file_hash TEXT DEFAULT '';")
+    if "is_starred" not in doc_cols:
+        c.execute("ALTER TABLE document_history ADD COLUMN is_starred INTEGER DEFAULT 0;")
+    if "share_token" not in doc_cols:
+        c.execute("ALTER TABLE document_history ADD COLUMN share_token TEXT DEFAULT '';")
 
     conn.commit()
     conn.close()
@@ -117,7 +131,7 @@ init_and_migrate_db()
 # ---------------------------------------------------------
 # FASTAPI APPLICATION & CORS MIDDLEWARE
 # ---------------------------------------------------------
-app = FastAPI(title="SmartSorter API", version="4.0.0")
+app = FastAPI(title="SmartSorter API", version="5.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -161,6 +175,14 @@ class CategoryOverrideSchema(BaseModel):
 
 class AskDocumentSchema(BaseModel):
     question: str
+
+class AskFolderSchema(BaseModel):
+    user_id: int
+    category: str
+    question: str
+
+class UserStatusUpdateSchema(BaseModel):
+    account_status: str
 
 def hash_pw(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
@@ -254,7 +276,7 @@ def register_user(payload: RegisterSchema):
 
         pwd_hash = hash_pw(payload.password)
         c.execute(
-            "INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)",
+            "INSERT INTO users (username, email, password_hash, role, account_status) VALUES (?, ?, ?, ?, 'Active')",
             (payload.name.strip(), clean_email, pwd_hash, role)
         )
         user_id = c.lastrowid
@@ -283,16 +305,22 @@ def login_user(payload: LoginSchema):
     c = conn.cursor()
     try:
         clean_email = payload.email.strip().lower()
-        c.execute("SELECT id, username, email, password_hash, COALESCE(role, 'user') as role FROM users WHERE LOWER(email) = ?", (clean_email,))
+        c.execute(
+            "SELECT id, username, email, password_hash, COALESCE(role, 'user') as role, COALESCE(account_status, 'Active') as account_status FROM users WHERE LOWER(email) = ?",
+            (clean_email,)
+        )
         user = c.fetchone()
 
         if not user or not verify_pw(payload.password, user["password_hash"]):
             raise HTTPException(status_code=401, detail="Invalid email or password.")
 
+        if user["account_status"] == "Suspended" and clean_email != CREATOR_EMAIL.lower():
+            raise HTTPException(status_code=403, detail="Your account has been suspended by the Creator Administrator.")
+
         role = user["role"]
         if clean_email == CREATOR_EMAIL.lower() and role.lower() != "admin":
             role = "admin"
-            c.execute("UPDATE users SET role = 'admin' WHERE id = ?", (user["id"],))
+            c.execute("UPDATE users SET role = 'admin', account_status = 'Active' WHERE id = ?", (user["id"],))
 
         c.execute(
             "INSERT INTO system_logs (timestamp, username, action, details) VALUES (datetime('now'), ?, 'User Login', ?)",
@@ -424,7 +452,6 @@ async def upload_and_classify_documents(
             size_kb = round(len(contents) / 1024, 2)
             filename = file.filename
 
-            # SHA-256 Cryptographic Hash for Duplicate Detection
             file_hash = hashlib.sha256(contents).hexdigest()
 
             c.execute(
@@ -444,7 +471,6 @@ async def upload_and_classify_documents(
                 """, (username, f"SHA-256 matched '{filename}' with existing '{existing_doc['filename']}'"))
                 continue
 
-            # 1. Semantic Gemini Classification with Fallback
             category = "Miscellaneous"
             try:
                 import classifier
@@ -463,10 +489,8 @@ async def upload_and_classify_documents(
                 else:
                     category = "Miscellaneous"
 
-            # 2. Generate 1-Line AI Summary
             summary_text = generate_ai_summary(filename, contents, category)
 
-            # 3. Disk write
             user_target_dir = os.path.join(ORGANIZED_DIR, f"user_{user_id}", category)
             os.makedirs(user_target_dir, exist_ok=True)
             disk_path = os.path.join(user_target_dir, filename)
@@ -474,14 +498,12 @@ async def upload_and_classify_documents(
             with open(disk_path, "wb") as f_out:
                 f_out.write(contents)
 
-            # 4. SQLite persistence (including file_hash)
             c.execute("""
-                INSERT INTO document_history (user_id, filename, category, summary, file_hash, file_path, size_kb, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'Active', datetime('now'))
+                INSERT INTO document_history (user_id, filename, category, summary, file_hash, file_path, size_kb, is_starred, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'Active', datetime('now'))
             """, (user_id, filename, category, summary_text, file_hash, disk_path, size_kb))
             doc_id = c.lastrowid
 
-            # 5. Audit record
             c.execute("""
                 INSERT INTO system_logs (timestamp, username, action, details)
                 VALUES (datetime('now'), ?, 'Files Sorted', ?)
@@ -495,6 +517,7 @@ async def upload_and_classify_documents(
                 "file_hash": file_hash[:12],
                 "file_path": disk_path,
                 "size_kb": size_kb,
+                "is_starred": 0,
                 "status": "Active"
             })
 
@@ -534,7 +557,7 @@ def list_documents(
             s_param = f"%{search.strip()}%"
             params.extend([s_param, s_param, s_param])
 
-        query += " ORDER BY id DESC"
+        query += " ORDER BY is_starred DESC, id DESC"
         c.execute(query, params)
         rows = c.fetchall()
 
@@ -549,6 +572,8 @@ def list_documents(
                 "file_hash": r["file_hash"][:10] if "file_hash" in rk and r["file_hash"] else "",
                 "file_path": r["file_path"] if "file_path" in rk else "",
                 "size_kb": r["size_kb"] if "size_kb" in rk else 0.0,
+                "is_starred": bool(r["is_starred"]) if "is_starred" in rk else False,
+                "share_token": r["share_token"] if "share_token" in rk and r["share_token"] else "",
                 "status": r["status"] if "status" in rk else "Active",
                 "created_at": r["created_at"] if "created_at" in rk else ""
             })
@@ -557,7 +582,216 @@ def list_documents(
         conn.close()
 
 # ---------------------------------------------------------
-# UPGRADE 1: "ASK GEMINI" IN-DOCUMENT Q&A ENDPOINT
+# v5.0 UPGRADE 1: "ASK FOLDER AI" MULTI-DOCUMENT SYNTHESIS
+# ---------------------------------------------------------
+@app.post("/api/folders/ask")
+def ask_folder_ai(payload: AskFolderSchema):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        question = payload.question.strip()
+        category = payload.category.strip()
+        if not question:
+            raise HTTPException(status_code=400, detail="Question cannot be empty.")
+
+        if category == "All":
+            c.execute("SELECT * FROM document_history WHERE user_id = ? AND status = 'Active'", (payload.user_id,))
+        else:
+            c.execute(
+                "SELECT * FROM document_history WHERE user_id = ? AND category = ? AND status = 'Active'",
+                (payload.user_id, category)
+            )
+        docs = c.fetchall()
+        if not docs:
+            raise HTTPException(status_code=404, detail=f"No active files found in '{category}'.")
+
+        compiled_context = []
+        for d in docs[:15]:
+            rk = d.keys()
+            fname = d["filename"]
+            fcat = d["category"]
+            fsum = d["summary"] if "summary" in rk and d["summary"] else ""
+            fpath = d["file_path"] if "file_path" in rk and d["file_path"] else os.path.join(
+                ORGANIZED_DIR, f"user_{payload.user_id}", fcat, fname
+            )
+            ext = fname.split(".")[-1].lower() if "." in fname else ""
+            snippet = ""
+            if os.path.exists(fpath) and ext in ["txt", "md", "py", "js", "ts", "html", "css", "java", "sql", "json", "csv"]:
+                try:
+                    with open(fpath, "rb") as f:
+                        snippet = f.read(1500).decode("utf-8", errors="ignore").strip()
+                except Exception:
+                    snippet = ""
+            compiled_context.append(
+                f"File: {fname} (Category: {fcat}, Size: {d['size_kb']} KB)\nSummary: {fsum}\nExcerpt: {snippet[:500]}"
+            )
+
+        context_blob = "\n\n---\n\n".join(compiled_context)
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+        answer = None
+
+        if api_key:
+            try:
+                from google import genai
+                client = genai.Client(api_key=api_key)
+                prompt = (
+                    f"You are SmartSorter Folder Synthesis AI. Analyze the following {len(docs)} files "
+                    f"inside the '{category}' workspace folder and answer the user's request clearly.\n\n"
+                    f"Folder Files Context:\n{context_blob}\n\nUser Request: {question}"
+                )
+                resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+                if resp and resp.text:
+                    answer = resp.text.strip()
+            except Exception as e:
+                print(f"[Folder AI Fallback]: {e}")
+
+        if not answer:
+            bullet_list = "\n".join(
+                f"• {d['filename']} ({d['size_kb']} KB) — {d['summary'] if 'summary' in d.keys() and d['summary'] else d['category']}"
+                for d in docs[:10]
+            )
+            answer = (
+                f"📚 Multi-Document Synthesis for '{category}' ({len(docs)} active files):\n\n"
+                f"Indexed Documents Overview:\n{bullet_list}\n\n"
+                f"Key Synthesis & Study Guide:\n"
+                f"1. Combined Scope: Covers {len(docs)} curated resources totaling {round(sum(d['size_kb'] for d in docs), 1)} KB.\n"
+                f"2. Core Themes: Consolidated materials across {category} ready for revision and export.\n"
+                f"3. Recommended Action: Use 'Save Notes (.md)' to download this synthesis or export the folder as a ZIP bundle."
+            )
+
+        c.execute("SELECT username FROM users WHERE id = ?", (payload.user_id,))
+        u = c.fetchone()
+        uname = u["username"] if u else f"User_{payload.user_id}"
+
+        c.execute("""
+            INSERT INTO system_logs (timestamp, username, action, details)
+            VALUES (datetime('now'), ?, 'Folder AI Synthesis', ?)
+        """, (uname, f"Synthesized {len(docs)} files in '{category}': {question[:40]}"))
+        conn.commit()
+
+        return {"answer": answer, "category": category, "file_count": len(docs)}
+    finally:
+        conn.close()
+
+# ---------------------------------------------------------
+# v5.0 UPGRADE 2: STAR / PIN PRIORITY FILES
+# ---------------------------------------------------------
+@app.post("/api/documents/{doc_id}/star")
+def toggle_star_document(doc_id: int):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT id, filename, is_starred FROM document_history WHERE id = ?", (doc_id,))
+        doc = c.fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found.")
+
+        rk = doc.keys()
+        current_star = int(doc["is_starred"]) if "is_starred" in rk and doc["is_starred"] else 0
+        new_star = 0 if current_star == 1 else 1
+
+        c.execute("UPDATE document_history SET is_starred = ? WHERE id = ?", (new_star, doc_id))
+        conn.commit()
+        return {"id": doc_id, "is_starred": bool(new_star)}
+    finally:
+        conn.close()
+
+# ---------------------------------------------------------
+# v5.0 UPGRADE 3: INTERACTIVE ADMIN ACCOUNT STATUS TOGGLE
+# ---------------------------------------------------------
+@app.put("/api/admin/users/{target_user_id}/status")
+def toggle_user_account_status(target_user_id: int, payload: UserStatusUpdateSchema):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        new_status = payload.account_status.strip()
+        if new_status not in ["Active", "Suspended"]:
+            raise HTTPException(status_code=400, detail="Status must be 'Active' or 'Suspended'.")
+
+        c.execute("SELECT id, username, email, role FROM users WHERE id = ?", (target_user_id,))
+        u = c.fetchone()
+        if not u:
+            raise HTTPException(status_code=404, detail="User account not found.")
+
+        if u["email"].lower() == CREATOR_EMAIL.lower():
+            raise HTTPException(status_code=400, detail="Cannot suspend the Creator Admin account.")
+
+        c.execute("UPDATE users SET account_status = ? WHERE id = ?", (new_status, target_user_id))
+        c.execute("""
+            INSERT INTO system_logs (timestamp, username, action, details)
+            VALUES (datetime('now'), 'Creator Admin', 'Account Status Changed', ?)
+        """, (f"Set {u['username']} ({u['email']}) status to {new_status}",))
+        conn.commit()
+
+        return {"message": f"Account {u['email']} status updated to {new_status}", "status": new_status}
+    finally:
+        conn.close()
+
+# ---------------------------------------------------------
+# v5.0 UPGRADE 4: ONE-CLICK SHAREABLE FILE LINKS
+# ---------------------------------------------------------
+@app.post("/api/documents/{doc_id}/share")
+def generate_share_link(doc_id: int):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT * FROM document_history WHERE id = ?", (doc_id,))
+        doc = c.fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found.")
+
+        rk = doc.keys()
+        token = doc["share_token"] if "share_token" in rk and doc["share_token"] else ""
+        if not token:
+            token = secrets.token_hex(8)
+            c.execute("UPDATE document_history SET share_token = ? WHERE id = ?", (token, doc_id))
+
+            c.execute("SELECT username FROM users WHERE id = ?", (doc["user_id"],))
+            u = c.fetchone()
+            uname = u["username"] if u else f"User_{doc['user_id']}"
+
+            c.execute("""
+                INSERT INTO system_logs (timestamp, username, action, details)
+                VALUES (datetime('now'), ?, 'Share Link Created', ?)
+            """, (uname, f"Generated share link for '{doc['filename']}'"))
+            conn.commit()
+
+        share_url = f"http://localhost:8000/api/share/{token}"
+        return {"share_token": token, "share_url": share_url, "filename": doc["filename"]}
+    finally:
+        conn.close()
+
+@app.get("/api/share/{token}")
+def access_shared_file(token: str, download: bool = Query(False)):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT * FROM document_history WHERE share_token = ? AND status = 'Active'", (token.strip(),))
+        doc = c.fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Shared link is invalid or file has been removed.")
+
+        rk = doc.keys()
+        disk_path = doc["file_path"] if "file_path" in rk and doc["file_path"] else os.path.join(
+            ORGANIZED_DIR, f"user_{doc['user_id']}", doc["category"], doc["filename"]
+        )
+        if not os.path.exists(disk_path):
+            raise HTTPException(status_code=404, detail="Physical file missing on disk.")
+
+        mime_type, _ = mimetypes.guess_type(doc["filename"])
+        mime_type = mime_type or "application/octet-stream"
+        disposition = "attachment" if download else "inline"
+
+        return FileResponse(
+            path=disk_path,
+            media_type=mime_type,
+            headers={"Content-Disposition": f'{disposition}; filename="{doc["filename"]}"'}
+        )
+    finally:
+        conn.close()
+
+# ---------------------------------------------------------
+# SINGLE DOCUMENT "ASK GEMINI" Q&A ENDPOINT
 # ---------------------------------------------------------
 @app.post("/api/documents/{doc_id}/ask")
 def ask_document_question(doc_id: int, payload: AskDocumentSchema):
@@ -590,7 +824,6 @@ def ask_document_question(doc_id: int, payload: AskDocumentSchema):
         api_key = os.environ.get("GEMINI_API_KEY", "")
         answer = None
 
-        # Attempt live multimodal Gemini Q&A if GEMINI_API_KEY is available
         if api_key and contents:
             try:
                 from google import genai
@@ -600,8 +833,8 @@ def ask_document_question(doc_id: int, payload: AskDocumentSchema):
                 if ext in ["txt", "md", "py", "js", "ts", "html", "css", "java", "sql", "json", "csv"]:
                     text_data = contents[:15000].decode("utf-8", errors="ignore")
                     prompt = (
-                        f"You are SmartSorter AI Assistant. The user is viewing the file '{filename}' "
-                        f"(Category: {category}). Answer their question concisely and clearly.\n\n"
+                        f"You are SmartSorter AI Assistant. The user is viewing '{filename}' "
+                        f"(Category: {category}). Answer their question concisely.\n\n"
                         f"File Content:\n{text_data}\n\nUser Question: {question}"
                     )
                     resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
@@ -621,7 +854,6 @@ def ask_document_question(doc_id: int, payload: AskDocumentSchema):
             except Exception as e:
                 print(f"[Gemini Q&A Fallback for {filename}]: {e}")
 
-        # Intelligent local fallback analyzer if offline or rate-limited
         if not answer:
             if ext in ["txt", "md", "py", "js", "ts", "html", "css", "java", "sql", "json", "csv"] and contents:
                 text_str = contents.decode("utf-8", errors="ignore")
@@ -927,7 +1159,8 @@ def hard_delete_all_documents(user_id: int = Query(...)):
         conn.close()
 
 # ---------------------------------------------------------
-# WORKSPACE METRICS (WITH STORAGE BREAKDOWN) & ADMIN PORTAL
+# WORKSPACE METRICS & CREATOR ADMIN OVERSIGHT
+# (Storage quota left untouched at 100 MB for custom plan)
 # ---------------------------------------------------------
 @app.get("/api/workspace/summary")
 def get_workspace_summary(user_id: int):
@@ -976,7 +1209,7 @@ def get_admin_overview():
     conn = get_db()
     c = conn.cursor()
     try:
-        c.execute("SELECT id, username, email, COALESCE(role, 'user') as role FROM users")
+        c.execute("SELECT id, username, email, COALESCE(role, 'user') as role, COALESCE(account_status, 'Active') as account_status FROM users")
         user_rows = c.fetchall()
 
         total_accounts = len(user_rows)
@@ -1000,6 +1233,7 @@ def get_admin_overview():
             uname = u["username"]
             uemail = u["email"]
             urole = (u["role"] or "user").strip()
+            ustatus = u["account_status"] if "account_status" in u.keys() and u["account_status"] else "Active"
 
             if urole.lower() == "admin":
                 admin_count += 1
@@ -1022,7 +1256,7 @@ def get_admin_overview():
                 "name": uname,
                 "email": uemail,
                 "role": urole.upper(),
-                "status": "Active",
+                "status": ustatus,
                 "total_classified": u_lifetime,
                 "active_files": u_active_count,
                 "deleted_files": u_deleted_count,
@@ -1044,4 +1278,4 @@ def get_admin_overview():
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "app": "SmartSorter", "version": "4.0.0"}
+    return {"status": "ok", "app": "SmartSorter", "version": "5.0.0"}
