@@ -31,7 +31,12 @@ import {
   ExternalLink,
   Star,
   Share2,
-  Sparkles
+  Sparkles,
+  Upload,
+  AlertOctagon,
+  Settings,
+  HelpCircle,
+  Cloud
 } from "lucide-react";
 
 const API_BASE = "http://localhost:8000/api";
@@ -45,16 +50,6 @@ const STANDARD_CATEGORIES = [
   "Research Paper",
   "Financial & Admin",
   "Miscellaneous"
-];
-
-const CATEGORY_COLORS = [
-  "bg-blue-500",
-  "bg-amber-500",
-  "bg-emerald-500",
-  "bg-purple-500",
-  "bg-pink-500",
-  "bg-cyan-400",
-  "bg-rose-500"
 ];
 
 const formatTimestamp = (raw) => {
@@ -74,18 +69,6 @@ const formatTimestamp = (raw) => {
     hours = hours % 12 || 12;
 
     return `${day} ${month} ${year}, ${hours}:${minutes} ${ampm}`;
-  } catch {
-    return raw;
-  }
-};
-
-const formatTimeOnly = (raw) => {
-  if (!raw) return "";
-  try {
-    const isoString = raw.includes("T") ? raw : raw.replace(" ", "T") + "Z";
-    const d = new Date(isoString);
-    if (isNaN(d.getTime())) return raw.split(" ")[1] || raw;
-    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: true });
   } catch {
     return raw;
   }
@@ -119,32 +102,53 @@ export default function App() {
   const [resetStep, setResetStep] = useState(1);
   const [otpTimer, setOtpTimer] = useState(0);
 
-  // Workspace States
+  // User Portal Active Tab vs Dedicated Creator Operations Tab
   const [activeTab, setActiveTab] = useState("library");
+  const [creatorTab, setCreatorTab] = useState("telemetry"); // 'telemetry' | 'support' | 'users' | 'audit'
+  const [ticketFilter, setTicketFilter] = useState("All");   // 'All' | 'Open' | 'Resolved'
+  const [replyInputs, setReplyInputs] = useState({});
+
+  // Per-User Summary State (Strictly for Standard Users)
   const [summary, setSummary] = useState({
     active_files_count: 0,
+    bin_files_count: 0,
+    spam_files_count: 0,
+    offline_files_count: 0,
     total_storage_kb: 0,
     total_storage_mb: 0,
     storage_limit_mb: 100,
+    free_limit_mb: 100,
+    subscription_plan: "Free",
+    cloud_linked: false,
+    cloud_provider: "None",
+    cloud_email: "",
+    drive_binding_hash: "",
     category_counts: {},
     category_storage_kb: {},
   });
+
   const [documents, setDocuments] = useState([]);
   const [activity, setActivity] = useState([]);
+  const [feedbackList, setFeedbackList] = useState([]);
   const [adminData, setAdminData] = useState({
     total_accounts: 0,
     admin_count: 0,
     member_count: 0,
+    pro_subscribers: 0,
+    linked_drives_count: 0,
+    open_tickets_count: 0,
     total_files_classified: 0,
     active_files: 0,
     deleted_files: 0,
+    spam_files: 0,
     total_storage_mb: 0,
+    global_categories: [],
     users: [],
   });
+
   const [search, setSearch] = useState("");
   const [selectedFolder, setSelectedFolder] = useState("All");
-  const [statusFilter, setStatusFilter] = useState("Active");
-  const [sortBy, setSortBy] = useState("starred"); // 'starred' | 'newest' | 'size' | 'name'
+  const [sortBy, setSortBy] = useState("starred");
   const [starredOnly, setStarredOnly] = useState(false);
 
   const [customCategories, setCustomCategories] = useState(() => {
@@ -157,6 +161,17 @@ export default function App() {
   });
   const [uploadNotice, setUploadNotice] = useState("");
 
+  // Cloud Linking & Subscription States (Standard Users Only)
+  const [cloudModalOpen, setCloudModalOpen] = useState(false);
+  const [cloudProviderInput, setCloudProviderInput] = useState("Google Drive");
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+
+  // Settings & Feedback States
+  const [autoSortExt, setAutoSortExt] = useState(true);
+  const [aiDeepSummary, setAiDeepSummary] = useState(true);
+  const [fbCategory, setFbCategory] = useState("Cloud Drive Sync");
+  const [fbMessage, setFbMessage] = useState("");
+
   // Modals: Upload, Single-Doc Preview Q&A, and Folder AI Synthesis
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
@@ -166,7 +181,6 @@ export default function App() {
   const [qaMessages, setQaMessages] = useState([]);
   const [qaLoading, setQaLoading] = useState(false);
 
-  // v5.0 Folder AI Modal States
   const [folderAiTarget, setFolderAiTarget] = useState(null);
   const [folderAiQuestion, setFolderAiQuestion] = useState("");
   const [folderAiMessages, setFolderAiMessages] = useState([]);
@@ -188,12 +202,6 @@ export default function App() {
     const remSecs = String(secs % 60).padStart(2, "0");
     return `${mins}:${remSecs}`;
   };
-
-  useEffect(() => {
-    if (!isCreatorAdmin && (activeTab === "audit" || activeTab === "admin")) {
-      setActiveTab("library");
-    }
-  }, [isCreatorAdmin, activeTab]);
 
   useEffect(() => {
     if (previewDoc) {
@@ -219,9 +227,33 @@ export default function App() {
     }
   }, [folderAiTarget]);
 
+  const getStatusFilterForTab = (tab) => {
+    if (tab === "bin") return "Deleted";
+    if (tab === "spam") return "Spam";
+    return "Active";
+  };
+
   const fetchWorkspace = async () => {
     if (!currentUser) return;
 
+    // 1. If logged in as Creator Admin: Fetch ONLY Project Operations, Support Tickets, Users & Audit Logs
+    if (isCreatorAdmin) {
+      try {
+        const [adminRes, actRes, fbRes] = await Promise.all([
+          axios.get(`${API_BASE}/admin/overview`),
+          axios.get(`${API_BASE}/workspace/activity?limit=100`),
+          axios.get(`${API_BASE}/feedback`)
+        ]);
+        if (adminRes.data) setAdminData(adminRes.data);
+        setActivity(actRes.data || []);
+        setFeedbackList(fbRes.data || []);
+      } catch (e) {
+        console.error("Creator console fetch error:", e);
+      }
+      return;
+    }
+
+    // 2. If logged in as Standard User: Fetch User Workspace, Files & Their Support Tickets
     try {
       const sumRes = await axios.get(`${API_BASE}/workspace/summary?user_id=${currentUser.id}`);
       setSummary(sumRes.data);
@@ -230,34 +262,28 @@ export default function App() {
     }
 
     try {
-      const docRes = await axios.get(`${API_BASE}/documents?user_id=${currentUser.id}&search=${search}&status_filter=${statusFilter}`);
+      const sFilter = getStatusFilterForTab(activeTab);
+      const docRes = await axios.get(
+        `${API_BASE}/documents?user_id=${currentUser.id}&search=${search}&status_filter=${sFilter}`
+      );
       setDocuments(docRes.data.documents || []);
     } catch (e) {
       console.error("Documents error:", e);
     }
 
-    if (isCreatorAdmin) {
+    if (activeTab === "help") {
       try {
-        const actRes = await axios.get(`${API_BASE}/workspace/activity?limit=50`);
-        setActivity(actRes.data || []);
+        const fbRes = await axios.get(`${API_BASE}/feedback?user_id=${currentUser.id}`);
+        setFeedbackList(fbRes.data || []);
       } catch (e) {
-        console.error("Activity error:", e);
-      }
-
-      try {
-        const adminRes = await axios.get(`${API_BASE}/admin/overview`);
-        if (adminRes.data) {
-          setAdminData(adminRes.data);
-        }
-      } catch (e) {
-        console.error("Admin overview error:", e);
+        console.error("Feedback error:", e);
       }
     }
   };
 
   useEffect(() => {
     fetchWorkspace();
-  }, [currentUser, search, statusFilter, activeTab]);
+  }, [currentUser, search, activeTab, creatorTab]);
 
   // Auth Handlers
   const handleLogin = async (e, isAdminGate = false) => {
@@ -284,7 +310,11 @@ export default function App() {
 
       setCurrentUser(userData);
       localStorage.setItem("sorter_user", JSON.stringify(userData));
-      setActiveTab("library");
+      if (userData.email.toLowerCase() === CREATOR_EMAIL.toLowerCase()) {
+        setCreatorTab("telemetry");
+      } else {
+        setActiveTab("library");
+      }
     } catch (err) {
       setAuthError(err.response?.data?.detail || err.message || "Invalid credentials.");
     } finally {
@@ -304,7 +334,7 @@ export default function App() {
         email: regEmail.trim(),
         password: regPassword,
       });
-      setAuthSuccess("Account created successfully! You can now sign in.");
+      setAuthSuccess("Account created with 100 MB Free Quota! You can now sign in.");
       setTimeout(() => {
         setPortalMode("user");
         setLoginEmail(regEmail.trim());
@@ -410,7 +440,98 @@ export default function App() {
     setLoginPassword("");
   };
 
-  // v5.0 Upgrade Handlers
+  // Creator Admin Operations Handlers
+  const handleReplyTicket = async (ticketId, statusValue = "Resolved") => {
+    const text = (replyInputs[ticketId] || "").trim();
+    if (!text) {
+      alert("Please type a response to the user before sending.");
+      return;
+    }
+    try {
+      const res = await axios.put(`${API_BASE}/admin/feedback/${ticketId}/reply`, {
+        reply_text: text,
+        status: statusValue
+      });
+      setUploadNotice(`✅ ${res.data.message}`);
+      setReplyInputs((prev) => ({ ...prev, [ticketId]: "" }));
+      await fetchWorkspace();
+      setTimeout(() => setUploadNotice(""), 5000);
+    } catch (err) {
+      alert(err.response?.data?.detail || "Failed to send reply.");
+    }
+  };
+
+  const handleToggleUserStatus = async (userObj) => {
+    const nextStatus = userObj.status === "Active" ? "Suspended" : "Active";
+    if (!window.confirm(`Set account "${userObj.email}" to ${nextStatus}?`)) return;
+    try {
+      await axios.put(`${API_BASE}/admin/users/${userObj.id}/status`, {
+        account_status: nextStatus
+      });
+      await fetchWorkspace();
+    } catch (err) {
+      alert(err.response?.data?.detail || "Could not update user status.");
+    }
+  };
+
+  const handleExportAuditCsv = () => {
+    window.open(`${API_BASE}/admin/export-audit-csv`, "_blank");
+  };
+
+  // Standard User Handlers
+  const handleActivateSubscription = async (planName) => {
+    try {
+      const res = await axios.post(`${API_BASE}/cloud/subscribe`, {
+        user_id: currentUser.id,
+        plan_name: planName
+      });
+      setUploadNotice(`✨ ${res.data.message}`);
+      await fetchWorkspace();
+    } catch (err) {
+      alert(err.response?.data?.detail || "Subscription update failed.");
+    }
+  };
+
+  const handleLinkCloudDrive = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await axios.post(`${API_BASE}/cloud/link`, {
+        user_id: currentUser.id,
+        provider: cloudProviderInput,
+        cloud_email: currentUser.email
+      });
+      setUploadNotice(`🔒 ${res.data.message}`);
+      setCloudModalOpen(false);
+      await fetchWorkspace();
+    } catch (err) {
+      alert(err.response?.data?.detail || "Failed to link cloud storage.");
+    }
+  };
+
+  const handleUnlinkCloudDrive = async () => {
+    if (!window.confirm("Disconnect your personal Gmail Drive and revert to the 100 MB Free Quota?")) return;
+    try {
+      const res = await axios.post(`${API_BASE}/cloud/unlink?user_id=${currentUser.id}`);
+      setUploadNotice(res.data.message);
+      await fetchWorkspace();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSyncCloudDrive = async () => {
+    setIsSyncingCloud(true);
+    try {
+      const res = await axios.post(`${API_BASE}/cloud/sync`, { user_id: currentUser.id });
+      setUploadNotice(`🔄 ${res.data.message}`);
+      await fetchWorkspace();
+    } catch (err) {
+      alert(err.response?.data?.detail || "Cloud sync failed.");
+    } finally {
+      setIsSyncingCloud(false);
+    }
+  };
+
   const handleToggleStar = async (docId, e) => {
     if (e) e.stopPropagation();
     try {
@@ -418,6 +539,36 @@ export default function App() {
       await fetchWorkspace();
     } catch (err) {
       console.error("Star toggle failed:", err);
+    }
+  };
+
+  const handleToggleOffline = async (docId, e) => {
+    if (e) e.stopPropagation();
+    try {
+      const res = await axios.post(`${API_BASE}/documents/${docId}/offline`);
+      setUploadNotice(
+        res.data.is_offline
+          ? "📌 File pinned for Offline access."
+          : "Removed file from Offline cache."
+      );
+      await fetchWorkspace();
+    } catch (err) {
+      console.error("Offline toggle failed:", err);
+    }
+  };
+
+  const handleToggleSpam = async (docId, e) => {
+    if (e) e.stopPropagation();
+    try {
+      const res = await axios.post(`${API_BASE}/documents/${docId}/spam`);
+      setUploadNotice(
+        res.data.status === "Spam"
+          ? "⚠️ File moved to Spam quarantine."
+          : "✅ File restored from Spam to Active workspace."
+      );
+      await fetchWorkspace();
+    } catch (err) {
+      console.error("Spam toggle failed:", err);
     }
   };
 
@@ -436,16 +587,20 @@ export default function App() {
     }
   };
 
-  const handleToggleUserStatus = async (userObj) => {
-    const nextStatus = userObj.status === "Active" ? "Suspended" : "Active";
-    if (!window.confirm(`Set account "${userObj.email}" to ${nextStatus}?`)) return;
+  const handleSubmitFeedback = async (e) => {
+    e.preventDefault();
+    if (!fbMessage.trim()) return;
     try {
-      await axios.put(`${API_BASE}/admin/users/${userObj.id}/status`, {
-        account_status: nextStatus
+      const res = await axios.post(`${API_BASE}/feedback`, {
+        user_id: currentUser.id,
+        category: fbCategory,
+        message: fbMessage.trim()
       });
+      setFbMessage("");
+      setUploadNotice(`💬 ${res.data.message}`);
       await fetchWorkspace();
     } catch (err) {
-      alert(err.response?.data?.detail || "Could not update user status.");
+      alert("Could not submit feedback.");
     }
   };
 
@@ -570,14 +725,10 @@ export default function App() {
     );
   };
 
-  const handleExportAuditCsv = () => {
-    window.open(`${API_BASE}/admin/export-audit-csv`, "_blank");
-  };
-
   const handleDeleteSingle = async (docId, filename, permanent = false) => {
     const confirmMsg = permanent 
       ? `Permanently delete "${filename}"? This removes it completely from SQLite and disk.`
-      : `Move "${filename}" to trash?`;
+      : `Move "${filename}" to Bin?`;
     if (!window.confirm(confirmMsg)) return;
 
     try {
@@ -598,16 +749,6 @@ export default function App() {
     }
   };
 
-  const handleSoftDeleteAll = async () => {
-    if (!window.confirm("Move all local active files to Deleted status?")) return;
-    try {
-      await axios.post(`${API_BASE}/documents/soft-delete?user_id=${currentUser.id}`);
-      await fetchWorkspace();
-    } catch (err) {
-      console.error("Soft delete error:", err);
-    }
-  };
-
   const handleHardDeleteAll = async () => {
     if (!window.confirm("⚠️ PERMANENT WIPE: This will delete all files permanently from SQLite and disk. Continue?")) return;
     try {
@@ -622,11 +763,6 @@ export default function App() {
     e.preventDefault();
     if (!selectedFiles.length) {
       alert("Please select at least one file first.");
-      return;
-    }
-
-    if (!currentUser || !currentUser.id) {
-      alert("Session expired or invalid user ID. Please sign out and sign in again.");
       return;
     }
 
@@ -647,14 +783,13 @@ export default function App() {
 
       const skipped = res.data.skipped_duplicates || [];
       if (skipped.length > 0) {
-        const names = skipped.map((s) => `${s.filename} (matches ${s.matched_with})`).join(", ");
-        setUploadNotice(`🛡️ SHA-256 Duplicate Protection: Skipped ${skipped.length} duplicate file(s): ${names}`);
+        const names = skipped.map((s) => `${s.filename}`).join(", ");
+        setUploadNotice(`🛡️ SHA-256 Duplicate Filter: Routed ${skipped.length} duplicate file(s) to Spam (${names}).`);
       } else {
         setUploadNotice(`✅ Successfully classified & indexed ${res.data.files?.length || 0} file(s)!`);
       }
       setTimeout(() => setUploadNotice(""), 6000);
     } catch (err) {
-      console.error("Upload failed:", err);
       const detail = err.response?.data?.detail || err.message || "Upload request failed";
       alert("Upload Error: " + (typeof detail === "object" ? JSON.stringify(detail) : detail));
     } finally {
@@ -672,19 +807,9 @@ export default function App() {
     return <Package className="w-6 h-6 text-slate-400" />;
   };
 
-  const allCategoryOptions = Array.from(
-    new Set([
-      ...STANDARD_CATEGORIES,
-      ...customCategories,
-      ...Object.keys(summary.category_counts || {})
-    ])
-  );
-
-  const folderEntries = Array.from(
-    new Set([...Object.keys(summary.category_counts || {}), ...customCategories])
-  ).map((cat) => [cat, summary.category_counts?.[cat] || 0]);
-
-  // VIEW 1: AUTH PORTAL
+  // =========================================================
+  // VIEW 1: AUTHENTICATION PORTAL (USER OR CREATOR LOGIN)
+  // =========================================================
   if (!currentUser) {
     return (
       <div className="flex min-h-screen w-screen items-center justify-center bg-[#0a0f1d] p-4 text-slate-100 font-sans">
@@ -701,12 +826,12 @@ export default function App() {
             )}
             
             <h1 className="text-2xl font-bold tracking-tight text-white">
-              {portalMode === "admin" ? "Creator Admin Portal" : "SmartSorter"}
+              {portalMode === "admin" ? "Creator Operations Portal" : "SmartSorter"}
             </h1>
             <p className="mt-1 text-xs text-slate-400">
               {portalMode === "admin" 
-                ? "Dedicated security access for noragamiarota@gmail.com" 
-                : "Intelligent Multimodal File Workspace v5.0"}
+                ? "Dedicated project control, user governance & support desk" 
+                : "Identity-Bound Cloud AI File Workspace"}
             </p>
           </div>
 
@@ -750,7 +875,7 @@ export default function App() {
           {portalMode === "user" && (
             <form onSubmit={(e) => handleLogin(e, false)} className="space-y-4">
               <div>
-                <label className="text-xs font-semibold text-slate-300">Email Address</label>
+                <label className="text-xs font-semibold text-slate-300">Gmail / Email Address</label>
                 <div className="relative mt-1">
                   <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                   <input
@@ -758,7 +883,7 @@ export default function App() {
                     required
                     value={loginEmail}
                     onChange={(e) => setLoginEmail(e.target.value)}
-                    placeholder="Enter your mail ID"
+                    placeholder="Enter your Gmail ID"
                     className="w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
                   />
                 </div>
@@ -817,7 +942,7 @@ export default function App() {
           {portalMode === "admin" && (
             <form onSubmit={(e) => handleLogin(e, true)} className="space-y-4">
               <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300 text-center font-medium">
-                Restricted to Creator Account: <strong>noragamiarota@gmail.com</strong>
+                Restricted to Project Creator: <strong>noragamiarota@gmail.com</strong>
               </div>
 
               <div>
@@ -829,7 +954,7 @@ export default function App() {
                     required
                     value={loginEmail}
                     onChange={(e) => setLoginEmail(e.target.value)}
-                    placeholder="Enter your mail ID"
+                    placeholder="noragamiarota@gmail.com"
                     className="w-full rounded-xl border border-amber-500/30 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none"
                   />
                 </div>
@@ -855,7 +980,7 @@ export default function App() {
                 disabled={authLoading}
                 className="w-full rounded-xl bg-amber-500 py-2.5 text-xs font-bold text-slate-950 shadow-lg shadow-amber-500/20 transition hover:bg-amber-400 active:scale-95 disabled:opacity-50"
               >
-                {authLoading ? "Verifying Creator Admin..." : "Unlock Creator Hub →"}
+                {authLoading ? "Verifying Creator..." : "Launch Operations Console →"}
               </button>
             </form>
           )}
@@ -878,7 +1003,7 @@ export default function App() {
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-slate-300">Email Address</label>
+                <label className="text-xs font-semibold text-slate-300">Personal Gmail Address</label>
                 <div className="relative mt-1">
                   <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                   <input
@@ -886,7 +1011,7 @@ export default function App() {
                     required
                     value={regEmail}
                     onChange={(e) => setRegEmail(e.target.value)}
-                    placeholder="Enter your mail ID"
+                    placeholder="yourname@gmail.com"
                     className="w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
                   />
                 </div>
@@ -912,7 +1037,7 @@ export default function App() {
                 disabled={authLoading}
                 className="w-full rounded-xl bg-blue-600 py-2.5 text-xs font-semibold text-white shadow-lg shadow-blue-600/30 transition hover:bg-blue-500 active:scale-95 disabled:opacity-50"
               >
-                {authLoading ? "Creating Account..." : "Create Account →"}
+                {authLoading ? "Creating Account..." : "Create Account (100 MB Free) →"}
               </button>
 
               <button
@@ -1070,230 +1195,775 @@ export default function App() {
     );
   }
 
-  // VIEW 2: WORKSPACE (Storage quota untouched at 100 MB baseline)
-  const percentUsed = Math.min(
-    Math.round((summary.total_storage_mb / summary.storage_limit_mb) * 100),
-    100
+  // =========================================================
+  // VIEW 2A: DEDICATED CREATOR OPERATIONS CONSOLE
+  // (No personal uploads, no personal drive, no subscription plans)
+  // =========================================================
+  if (isCreatorAdmin) {
+    const filteredTickets = feedbackList.filter((t) =>
+      ticketFilter === "All" ? true : (t.status || "Open") === ticketFilter
+    );
+
+    return (
+      <div className="flex h-screen w-screen overflow-hidden bg-[#0b0f19] text-slate-100 font-sans">
+        {/* Creator Operations Left Sidebar */}
+        <aside className="w-64 border-r border-amber-500/15 bg-[#111827] flex flex-col justify-between py-6 px-4 shrink-0 select-none">
+          <div>
+            <div className="flex items-center gap-3 px-2 pb-5 mb-4 border-b border-white/10">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500 flex items-center justify-center text-slate-950 font-extrabold shadow-lg shadow-amber-500/20">
+                <ShieldCheck className="w-6 h-6" />
+              </div>
+              <div className="overflow-hidden">
+                <h1 className="text-base font-bold tracking-tight text-white">Creator Console</h1>
+                <p className="text-[11px] text-amber-400 font-semibold truncate">
+                  Project Operations Only
+                </p>
+              </div>
+            </div>
+
+            <nav className="space-y-1.5">
+              <button
+                onClick={() => setCreatorTab("telemetry")}
+                className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl text-xs font-bold transition ${
+                  creatorTab === "telemetry"
+                    ? "bg-amber-500 text-slate-950 shadow-md"
+                    : "text-slate-300 hover:bg-white/5"
+                }`}
+              >
+                <HardDrive className="w-4 h-4 shrink-0" />
+                <span>Project Telemetry</span>
+              </button>
+
+              <button
+                onClick={() => setCreatorTab("support")}
+                className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-xs font-bold transition ${
+                  creatorTab === "support"
+                    ? "bg-amber-500 text-slate-950 shadow-md"
+                    : "text-slate-300 hover:bg-white/5"
+                }`}
+              >
+                <div className="flex items-center gap-3.5">
+                  <HelpCircle className="w-4 h-4 shrink-0" />
+                  <span>Support & Issues Desk</span>
+                </div>
+                {adminData.open_tickets_count > 0 && (
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                    creatorTab === "support" ? "bg-slate-950 text-amber-400" : "bg-red-500 text-white"
+                  }`}>
+                    {adminData.open_tickets_count}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => setCreatorTab("users")}
+                className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-xs font-bold transition ${
+                  creatorTab === "users"
+                    ? "bg-amber-500 text-slate-950 shadow-md"
+                    : "text-slate-300 hover:bg-white/5"
+                }`}
+              >
+                <div className="flex items-center gap-3.5">
+                  <Shield className="w-4 h-4 shrink-0" />
+                  <span>User Governance</span>
+                </div>
+                <span className={`text-[11px] ${creatorTab === "users" ? "text-slate-950" : "text-slate-400"}`}>
+                  {adminData.member_count}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setCreatorTab("audit")}
+                className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl text-xs font-bold transition ${
+                  creatorTab === "audit"
+                    ? "bg-amber-500 text-slate-950 shadow-md"
+                    : "text-slate-300 hover:bg-white/5"
+                }`}
+              >
+                <Clock className="w-4 h-4 shrink-0" />
+                <span>Security & Audit Logs</span>
+              </button>
+            </nav>
+          </div>
+
+          {/* Creator Status & Sign Out Footer */}
+          <div className="space-y-3">
+            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px]">
+              <p className="font-bold text-amber-300 mb-0.5">⚡ System Status: Online</p>
+              <p className="text-slate-400">SQLite WAL Engine • Gemini 2.5 Flash</p>
+            </div>
+
+            <div className="flex items-center justify-between p-3 rounded-xl bg-white/[0.03] border border-white/10">
+              <div className="flex items-center gap-2.5 overflow-hidden">
+                <div className="w-8 h-8 rounded-full bg-amber-500 text-slate-950 flex items-center justify-center font-extrabold text-xs shrink-0">
+                  C
+                </div>
+                <div className="overflow-hidden">
+                  <p className="text-xs font-bold text-white truncate">{currentUser.name}</p>
+                  <p className="text-[10px] text-amber-400 truncate">{currentUser.email}</p>
+                </div>
+              </div>
+              <button
+                onClick={handleSignOut}
+                title="Sign Out of Creator Console"
+                className="text-slate-400 hover:text-red-400 p-1.5 rounded-lg hover:bg-white/5 transition"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </aside>
+
+        {/* Creator Operations Main Workspace */}
+        <main className="flex-1 flex flex-col overflow-y-auto px-8 py-6">
+          <header className="flex items-center justify-between pb-5 border-b border-white/10">
+            <div>
+              <h2 className="text-xl font-bold tracking-tight text-white">
+                {creatorTab === "telemetry" && "Global Project Telemetry & AI Classification Health"}
+                {creatorTab === "support" && "User Support, Bug Reports & Issue Resolution Desk"}
+                {creatorTab === "users" && "Registered User Accounts & Cloud Bridge Governance"}
+                {creatorTab === "audit" && "Platform Security & Chronological System Audit"}
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Dedicated administrative control center for SmartSorter operations
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2.5">
+              <button
+                onClick={handleExportAuditCsv}
+                className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold border border-white/10 transition"
+              >
+                <Download className="w-3.5 h-3.5 text-amber-400" />
+                <span>Export System CSV</span>
+              </button>
+              <button
+                onClick={fetchWorkspace}
+                className="flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl text-xs font-bold shadow-lg transition"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Sync Live Telemetry</span>
+              </button>
+            </div>
+          </header>
+
+          {uploadNotice && (
+            <div className="mt-4 flex items-center justify-between rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-xs text-emerald-300">
+              <span>{uploadNotice}</span>
+              <button onClick={() => setUploadNotice("")} className="text-slate-400 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* CREATOR TAB 1: PROJECT TELEMETRY & AI ENGINE */}
+          {creatorTab === "telemetry" && (
+            <div className="mt-6 space-y-6">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-[#151d2c] border border-white/10 p-5 rounded-2xl">
+                  <p className="text-[11px] text-slate-400 uppercase font-bold">Registered Members</p>
+                  <p className="text-3xl font-extrabold text-blue-400 mt-1">{adminData.member_count}</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {adminData.pro_subscribers} Paid Maintenance • {adminData.linked_drives_count} Linked Drives
+                  </p>
+                </div>
+
+                <div className="bg-[#151d2c] border border-white/10 p-5 rounded-2xl">
+                  <p className="text-[11px] text-slate-400 uppercase font-bold">Total Files Sorted (Project-Wide)</p>
+                  <p className="text-3xl font-extrabold text-white mt-1">{adminData.total_files_classified}</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {adminData.active_files} Active • {adminData.deleted_files} Bin • {adminData.spam_files} Spam
+                  </p>
+                </div>
+
+                <div className="bg-[#151d2c] border border-white/10 p-5 rounded-2xl">
+                  <p className="text-[11px] text-slate-400 uppercase font-bold">Open Support Issues</p>
+                  <p className="text-3xl font-extrabold text-amber-400 mt-1">{adminData.open_tickets_count}</p>
+                  <button
+                    onClick={() => setCreatorTab("support")}
+                    className="text-xs text-amber-300 hover:underline mt-1 inline-block font-semibold"
+                  >
+                    Open Support Desk →
+                  </button>
+                </div>
+
+                <div className="bg-[#151d2c] border border-white/10 p-5 rounded-2xl">
+                  <p className="text-[11px] text-slate-400 uppercase font-bold">Global Index Footprint</p>
+                  <p className="text-3xl font-extrabold text-emerald-400 mt-1">{adminData.total_storage_mb} MB</p>
+                  <p className="text-xs text-slate-500 mt-1">SQLite WAL Concurrency Active</p>
+                </div>
+              </div>
+
+              {/* Global Category Breakdown */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="bg-[#151d2c] border border-white/10 rounded-2xl p-5">
+                  <h3 className="text-sm font-bold text-white mb-1">Global AI Classification Breakdown</h3>
+                  <p className="text-xs text-slate-400 mb-4">
+                    Aggregate distribution of all files sorted by Gemini Flash across all user workspaces
+                  </p>
+                  {adminData.global_categories && adminData.global_categories.length > 0 ? (
+                    <div className="space-y-3">
+                      {adminData.global_categories.map((catObj) => (
+                        <div key={catObj.category} className="flex items-center justify-between p-3 rounded-xl bg-slate-900/70 border border-white/5 text-xs">
+                          <div className="flex items-center gap-2.5">
+                            <Folder className="w-4 h-4 text-amber-400" />
+                            <span className="font-semibold text-slate-200">{catObj.category}</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="font-bold text-amber-300">{catObj.count} files</span>
+                            <span className="text-slate-500 ml-2 font-mono">({catObj.size_kb} KB)</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500 italic py-6 text-center">
+                      No files classified across the platform yet.
+                    </p>
+                  )}
+                </div>
+
+                <div className="bg-[#151d2c] border border-white/10 rounded-2xl p-5">
+                  <h3 className="text-sm font-bold text-white mb-1">Latest System & User Events</h3>
+                  <p className="text-xs text-slate-400 mb-4">
+                    Real-time stream of user registrations, Drive bindings, and support requests
+                  </p>
+                  <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+                    {activity.slice(0, 8).map((act) => (
+                      <div key={act.id} className="p-3 rounded-xl bg-slate-900/70 border border-white/5 text-xs">
+                        <div className="flex justify-between font-semibold">
+                          <span className="text-amber-300">{act.username}</span>
+                          <span className="text-[11px] font-mono text-slate-400">{formatTimestamp(act.timestamp)}</span>
+                        </div>
+                        <p className="text-slate-200 font-medium mt-0.5">{act.action}</p>
+                        <p className="text-[11px] text-slate-400 italic mt-0.5">{act.details}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* CREATOR TAB 2: SUPPORT & ISSUES DESK (INTERACTIVE REPLY SYSTEM) */}
+          {creatorTab === "support" && (
+            <div className="mt-6 space-y-5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {["All", "Open", "Resolved"].map((statusOpt) => (
+                    <button
+                      key={statusOpt}
+                      onClick={() => setTicketFilter(statusOpt)}
+                      className={`px-4 py-1.5 rounded-xl text-xs font-bold transition ${
+                        ticketFilter === statusOpt
+                          ? "bg-amber-500 text-slate-950"
+                          : "bg-[#151d2c] text-slate-300 border border-white/10 hover:bg-white/5"
+                      }`}
+                    >
+                      {statusOpt} Tickets
+                    </button>
+                  ))}
+                </div>
+                <span className="text-xs text-slate-400">
+                  Showing {filteredTickets.length} support ticket(s)
+                </span>
+              </div>
+
+              {filteredTickets.length > 0 ? (
+                <div className="space-y-4">
+                  {filteredTickets.map((ticket) => (
+                    <div
+                      key={ticket.id}
+                      className="p-5 rounded-2xl bg-[#151d2c] border border-white/10 space-y-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/5 pb-3">
+                        <div className="flex items-center gap-2.5">
+                          <span className="px-2.5 py-0.5 rounded-md bg-slate-800 text-slate-300 font-mono text-xs font-bold">
+                            #{ticket.id}
+                          </span>
+                          <span className="text-sm font-bold text-white">{ticket.username}</span>
+                          {ticket.user_email && (
+                            <span className="text-xs text-slate-400">({ticket.user_email})</span>
+                          )}
+                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-500/20 text-blue-300">
+                            {ticket.category}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs font-mono text-slate-400">
+                            {formatTimestamp(ticket.created_at)}
+                          </span>
+                          <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                            ticket.status === "Resolved"
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                              : "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                          }`}>
+                            {ticket.status || "Open"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* User's Submitted Issue */}
+                      <div className="p-3.5 rounded-xl bg-slate-900/80 border border-white/5 text-xs text-slate-200 leading-relaxed">
+                        <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">User Issue / Request:</p>
+                        {ticket.message}
+                      </div>
+
+                      {/* Existing Creator Reply if present */}
+                      {ticket.admin_reply && (
+                        <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
+                          <div className="flex justify-between text-[10px] uppercase font-bold text-amber-400 mb-1">
+                            <span>✓ Your Official Creator Response</span>
+                            {ticket.replied_at && <span>{formatTimestamp(ticket.replied_at)}</span>}
+                          </div>
+                          <p>{ticket.admin_reply}</p>
+                        </div>
+                      )}
+
+                      {/* Reply Input Box for Creator */}
+                      <div className="flex gap-2.5 pt-1">
+                        <input
+                          type="text"
+                          value={replyInputs[ticket.id] || ""}
+                          onChange={(e) =>
+                            setReplyInputs((prev) => ({ ...prev, [ticket.id]: e.target.value }))
+                          }
+                          placeholder={
+                            ticket.admin_reply
+                              ? "Update your official reply to this user..."
+                              : `Write an official reply to ${ticket.username}...`
+                          }
+                          className="flex-1 rounded-xl bg-slate-900 border border-white/10 px-4 py-2 text-xs text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleReplyTicket(ticket.id, "Resolved")}
+                          className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition shrink-0"
+                        >
+                          Send Reply & Resolve
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-12 rounded-2xl bg-[#151d2c] border border-white/10 text-center text-slate-400 text-sm">
+                  No support tickets matching "{ticketFilter}".
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* CREATOR TAB 3: USER & CLOUD BRIDGE GOVERNANCE */}
+          {creatorTab === "users" && (
+            <div className="mt-6">
+              <div className="rounded-2xl border border-white/10 bg-[#151d2c] overflow-hidden">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-900/90 text-slate-400 uppercase text-[10px] border-b border-white/10">
+                    <tr>
+                      <th className="py-3.5 px-4">User Account</th>
+                      <th className="py-3.5 px-4">Maintenance Plan</th>
+                      <th className="py-3.5 px-4">Identity-Bound Storage</th>
+                      <th className="py-3.5 px-4">Files Processed</th>
+                      <th className="py-3.5 px-4">Account Status</th>
+                      <th className="py-3.5 px-4 text-right">Access Control</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5 text-slate-200">
+                    {adminData.users.map((u) => (
+                      <tr key={u.id} className="hover:bg-white/[0.02]">
+                        <td className="py-3.5 px-4">
+                          <p className="font-bold text-white">{u.name}</p>
+                          <p className="text-[11px] text-slate-400">{u.email}</p>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          {u.role === "ADMIN" ? (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300">
+                              PROJECT CREATOR
+                            </span>
+                          ) : (
+                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                              u.subscription_plan !== "Free"
+                                ? "bg-blue-500/20 text-blue-300"
+                                : "bg-white/5 text-slate-400"
+                            }`}>
+                              {u.subscription_plan}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-300">
+                          {u.role === "ADMIN" ? "Operations Console" : u.cloud_provider}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          {u.role === "ADMIN" ? (
+                            <span className="text-slate-500 italic">—</span>
+                          ) : (
+                            <span>{u.total_classified} files ({u.storage_kb} KB)</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                            u.status === "Suspended"
+                              ? "bg-red-500/20 text-red-300"
+                              : "bg-emerald-500/20 text-emerald-300"
+                          }`}>
+                            {u.status}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 text-right">
+                          {u.email.toLowerCase() !== CREATOR_EMAIL.toLowerCase() ? (
+                            <button
+                              onClick={() => handleToggleUserStatus(u)}
+                              className={`px-3 py-1.5 rounded-xl text-[11px] font-bold transition ${
+                                u.status === "Suspended"
+                                  ? "bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300"
+                                  : "bg-red-500/20 hover:bg-red-500/30 text-red-300"
+                              }`}
+                            >
+                              {u.status === "Suspended" ? "Activate User" : "Suspend User"}
+                            </button>
+                          ) : (
+                            <span className="text-[11px] text-amber-400 font-bold">Creator Account</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* CREATOR TAB 4: SECURITY & SYSTEM AUDIT LOGS */}
+          {creatorTab === "audit" && (
+            <div className="mt-6">
+              <div className="rounded-2xl border border-white/10 bg-[#151d2c] overflow-hidden">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-900/90 text-slate-400 uppercase text-[10px] border-b border-white/10">
+                    <tr>
+                      <th className="py-3.5 px-4">Timestamp</th>
+                      <th className="py-3.5 px-4">Actor</th>
+                      <th className="py-3.5 px-4">Event Type</th>
+                      <th className="py-3.5 px-4">Execution Metadata</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5 text-slate-300">
+                    {activity.map((act) => (
+                      <tr key={act.id} className="hover:bg-white/[0.02]">
+                        <td className="py-3 px-4 font-mono text-xs whitespace-nowrap">
+                          {formatTimestamp(act.timestamp)}
+                        </td>
+                        <td className="py-3 px-4 font-semibold text-white">{act.username}</td>
+                        <td className="py-3 px-4 text-amber-400 font-semibold">{act.action}</td>
+                        <td className="py-3 px-4 text-slate-400 italic">{act.details}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </main>
+      </div>
+    );
+  }
+
+  // =========================================================
+  // VIEW 2B: STANDARD USER WORKSPACE (GOOGLE DRIVE INTERFACE)
+  // =========================================================
+  const allCategoryOptions = Array.from(
+    new Set([
+      ...STANDARD_CATEGORIES,
+      ...customCategories,
+      ...Object.keys(summary.category_counts || {})
+    ])
   );
 
-  // Filter & Sort Documents
+  const folderEntries = Array.from(
+    new Set([...Object.keys(summary.category_counts || {}), ...customCategories])
+  ).map((cat) => [cat, summary.category_counts?.[cat] || 0]);
+
   const displayedDocs = documents
-    .filter((d) => selectedFolder === "All" || d.category === selectedFolder)
+    .filter((d) => {
+      if (activeTab === "library") return selectedFolder === "All" || d.category === selectedFolder;
+      if (activeTab === "offline") return d.is_offline;
+      return true;
+    })
     .filter((d) => (!starredOnly ? true : d.is_starred))
     .slice()
     .sort((a, b) => {
+      if (activeTab === "recent" || sortBy === "newest") return b.id - a.id;
       if (sortBy === "size") return (b.size_kb || 0) - (a.size_kb || 0);
       if (sortBy === "name") return a.filename.localeCompare(b.filename);
-      if (sortBy === "newest") return b.id - a.id;
-      // Default 'starred': starred items first, then newest
       if (b.is_starred !== a.is_starred) return (b.is_starred ? 1 : 0) - (a.is_starred ? 1 : 0);
       return b.id - a.id;
     });
 
-  const totalStorageKb = summary.total_storage_kb || 1;
-  const storageSegments = Object.entries(summary.category_storage_kb || {});
+  const quotaMb = summary.storage_limit_mb || 100;
+  const usedMb = summary.total_storage_mb || 0;
+  const storagePercent = usedMb > 0 ? Math.max(Math.min(Math.round((usedMb / quotaMb) * 100), 100), 2) : 0;
+  const quotaDisplayLabel = summary.cloud_linked
+    ? `${usedMb} MB of ${(quotaMb / 1024).toFixed(0)} GB used (${summary.cloud_email})`
+    : `${usedMb} MB of 100 MB used`;
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#0d131f] text-slate-100 font-sans">
+    <div className="flex h-screen w-screen overflow-hidden bg-[#131314] text-slate-100 font-sans">
       
-      {/* 1. LEFT SIDEBAR PANEL */}
-      <aside className="w-64 border-r border-white/5 bg-[#111827]/80 flex flex-col justify-between p-5 backdrop-blur-md shrink-0">
+      {/* 1. USER GOOGLE DRIVE STYLE SIDEBAR */}
+      <aside className="w-64 border-r border-white/10 bg-[#1e1f20] flex flex-col justify-between py-5 px-3 shrink-0 select-none overflow-y-auto">
         <div>
-          <div className="flex items-center gap-3 mb-8 px-1">
-            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shadow-lg ${
-              isCreatorAdmin ? "bg-amber-500 shadow-amber-500/30 text-slate-950 font-bold" : "bg-blue-600 shadow-blue-600/30 text-white"
-            }`}>
-              {isCreatorAdmin ? <ShieldCheck className="w-5 h-5" /> : <Folder className="w-5 h-5" />}
-            </div>
-            <div>
-              <h1 className="font-bold text-base leading-tight">SmartSorter</h1>
-              <p className="text-xs text-slate-500 font-medium">
-                {isCreatorAdmin ? "Creator Oversight" : "Workspace SaaS v5.0"}
+          <div className="flex items-center justify-between px-4 pb-4 mb-2 border-b border-white/10">
+            <div className="overflow-hidden">
+              <h1 className="text-lg font-medium tracking-tight text-slate-100 flex items-center gap-2">
+                <span>SmartSorter</span>
+                {summary.subscription_plan !== "Free" && (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-semibold">
+                    PRO
+                  </span>
+                )}
+              </h1>
+              <p className="text-[11px] text-slate-400 truncate">
+                {summary.cloud_linked ? `🔒 Bound: ${currentUser.email}` : "100 MB Free Workspace"}
               </p>
             </div>
           </div>
 
-          <nav className="space-y-1.5">
-            <button 
+          <nav className="space-y-0.5">
+            <button
               onClick={() => setActiveTab("library")}
-              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl font-medium text-xs transition ${
-                activeTab === "library" ? "bg-blue-600/15 text-blue-400 font-semibold" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
+              className={`w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-sm font-medium transition ${
+                activeTab === "library"
+                  ? "bg-[#004a77] text-[#c2e7ff]"
+                  : "text-slate-200 hover:bg-white/5"
               }`}
             >
-              <Folder className="w-4 h-4" />
-              <span>Main Library</span>
+              <Folder className="w-4 h-4 shrink-0" />
+              <span>Files & Folders</span>
             </button>
 
-            <button 
-              onClick={() => setActiveTab("drive")}
-              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl font-medium text-xs transition ${
-                activeTab === "drive" ? "bg-blue-600/15 text-blue-400 font-semibold" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
+            <button
+              onClick={() => setActiveTab("recent")}
+              className={`w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-sm font-medium transition ${
+                activeTab === "recent"
+                  ? "bg-[#004a77] text-[#c2e7ff]"
+                  : "text-slate-200 hover:bg-white/5"
               }`}
             >
-              <HardDrive className="w-4 h-4" />
-              <span>Drive Catalog</span>
+              <Clock className="w-4 h-4 shrink-0" />
+              <span>Recent</span>
             </button>
 
-            {isCreatorAdmin && (
-              <button 
-                onClick={() => setActiveTab("audit")}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl font-medium text-xs transition ${
-                  activeTab === "audit" ? "bg-amber-500/15 text-amber-400 font-semibold" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
-                }`}
-              >
-                <Clock className="w-4 h-4" />
-                <span>Audit & Logins</span>
-              </button>
-            )}
+            <button
+              onClick={() => setActiveTab("uploads")}
+              className={`w-full flex items-center justify-between px-4 py-2.5 rounded-full text-sm font-medium transition ${
+                activeTab === "uploads"
+                  ? "bg-[#004a77] text-[#c2e7ff]"
+                  : "text-slate-200 hover:bg-white/5"
+              }`}
+            >
+              <div className="flex items-center gap-4">
+                <Upload className="w-4 h-4 shrink-0" />
+                <span>Uploads</span>
+              </div>
+              <span className="text-[11px] text-slate-400">{summary.active_files_count}</span>
+            </button>
 
-            {isCreatorAdmin && (
-              <button 
-                onClick={() => setActiveTab("admin")}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl font-medium text-xs transition ${
-                  activeTab === "admin" ? "bg-amber-500/15 text-amber-400 font-semibold" : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
+            <button
+              onClick={() => setActiveTab("offline")}
+              className={`w-full flex items-center justify-between px-4 py-2.5 rounded-full text-sm font-medium transition ${
+                activeTab === "offline"
+                  ? "bg-[#004a77] text-[#c2e7ff]"
+                  : "text-slate-200 hover:bg-white/5"
+              }`}
+            >
+              <div className="flex items-center gap-4">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>Offline</span>
+              </div>
+              {summary.offline_files_count > 0 && (
+                <span className="text-[11px] px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300">
+                  {summary.offline_files_count}
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setActiveTab("bin")}
+              className={`w-full flex items-center justify-between px-4 py-2.5 rounded-full text-sm font-medium transition ${
+                activeTab === "bin"
+                  ? "bg-[#004a77] text-[#c2e7ff]"
+                  : "text-slate-200 hover:bg-white/5"
+              }`}
+            >
+              <div className="flex items-center gap-4">
+                <Trash2 className="w-4 h-4 shrink-0" />
+                <span>Bin</span>
+              </div>
+              {summary.bin_files_count > 0 && (
+                <span className="text-[11px] text-slate-400">{summary.bin_files_count}</span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setActiveTab("spam")}
+              className={`w-full flex items-center justify-between px-4 py-2.5 rounded-full text-sm font-medium transition ${
+                activeTab === "spam"
+                  ? "bg-[#004a77] text-[#c2e7ff]"
+                  : "text-slate-200 hover:bg-white/5"
+              }`}
+            >
+              <div className="flex items-center gap-4">
+                <AlertOctagon className="w-4 h-4 shrink-0" />
+                <span>Spam</span>
+              </div>
+              {summary.spam_files_count > 0 && (
+                <span className="text-[11px] px-1.5 rounded-full bg-red-500/20 text-red-300">
+                  {summary.spam_files_count}
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setActiveTab("settings")}
+              className={`w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-sm font-medium transition ${
+                activeTab === "settings"
+                  ? "bg-[#004a77] text-[#c2e7ff]"
+                  : "text-slate-200 hover:bg-white/5"
+              }`}
+            >
+              <Settings className="w-4 h-4 shrink-0" />
+              <span>Settings</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab("help")}
+              className={`w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-sm font-medium transition ${
+                activeTab === "help"
+                  ? "bg-[#004a77] text-[#c2e7ff]"
+                  : "text-slate-200 hover:bg-white/5"
+              }`}
+            >
+              <HelpCircle className="w-4 h-4 shrink-0" />
+              <span>Help and feedback</span>
+            </button>
+
+            <div className="pt-2">
+              <button
+                onClick={() => setActiveTab("storage")}
+                className={`w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-sm font-medium transition ${
+                  activeTab === "storage"
+                    ? "bg-[#004a77] text-[#c2e7ff]"
+                    : "text-slate-200 hover:bg-white/5"
                 }`}
               >
-                <Shield className="w-4 h-4" />
-                <span>User Oversight</span>
+                <Cloud className="w-4 h-4 shrink-0" />
+                <span>Storage</span>
               </button>
-            )}
+
+              <div className="px-4 pt-2 pb-3">
+                <div className="w-full h-1 bg-slate-700 rounded-full overflow-hidden mb-2.5">
+                  <div
+                    className="h-full bg-[#8ab4f8] rounded-full transition-all duration-300"
+                    style={{ width: `${storagePercent}%` }}
+                  />
+                </div>
+
+                <p className="text-xs text-slate-300 mb-1 truncate" title={quotaDisplayLabel}>
+                  {quotaDisplayLabel}
+                </p>
+                <p className="text-[10px] text-slate-500 mb-3">
+                  {summary.total_storage_kb} KB active ({summary.active_files_count} files)
+                </p>
+
+                <button
+                  type="button"
+                  onClick={() => setCloudModalOpen(true)}
+                  className="px-4 py-2 rounded-full border border-slate-500/80 hover:bg-white/5 text-xs font-medium text-[#8ab4f8] transition"
+                >
+                  {summary.cloud_linked ? "Manage Gmail Drive" : "Link My Gmail Drive"}
+                </button>
+              </div>
+            </div>
           </nav>
         </div>
 
-        {/* STORAGE DISTRIBUTION BAR */}
-        <div className="space-y-4">
-          <div className="bg-slate-900/80 border border-white/5 p-3.5 rounded-xl">
-            <div className="flex justify-between text-xs font-semibold mb-2">
-              <span className="text-slate-400">Storage Used</span>
-              <span className={isCreatorAdmin ? "text-amber-400" : "text-blue-400"}>{percentUsed}%</span>
+        <div className="mt-4 mx-2 flex items-center justify-between p-2.5 rounded-2xl bg-white/[0.03] border border-white/5">
+          <div className="flex items-center gap-2.5 overflow-hidden">
+            <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs uppercase shrink-0">
+              {currentUser.name ? currentUser.name[0] : "U"}
             </div>
-
-            <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden flex mb-2">
-              {storageSegments.length > 0 ? (
-                storageSegments.map(([cat, kb], idx) => {
-                  const segPct = Math.max(Math.round((kb / totalStorageKb) * 100), 5);
-                  const colorClass = CATEGORY_COLORS[idx % CATEGORY_COLORS.length];
-                  return (
-                    <div
-                      key={cat}
-                      title={`${cat}: ${kb} KB`}
-                      className={`h-full ${colorClass} transition-all duration-300`}
-                      style={{ width: `${segPct}%` }}
-                    />
-                  );
-                })
-              ) : (
-                <div className="h-full bg-blue-500/30 w-0" />
-              )}
+            <div className="overflow-hidden">
+              <p className="text-xs font-semibold truncate">{currentUser.name}</p>
+              <p className="text-[10px] text-slate-400 truncate" title={currentUser.email}>
+                {currentUser.email}
+              </p>
             </div>
-
-            <p className="text-[11px] text-slate-400 font-medium mb-2">
-              {summary.total_storage_mb} MB of {summary.storage_limit_mb} MB ({summary.active_files_count} files)
-            </p>
-
-            {storageSegments.length > 0 && (
-              <div className="space-y-1 pt-1.5 border-t border-white/5 max-h-24 overflow-y-auto">
-                {storageSegments.map(([cat, kb], idx) => (
-                  <div key={cat} className="flex items-center justify-between text-[10px] text-slate-400">
-                    <div className="flex items-center gap-1.5 truncate">
-                      <span className={`w-2 h-2 rounded-full shrink-0 ${CATEGORY_COLORS[idx % CATEGORY_COLORS.length]}`} />
-                      <span className="truncate">{cat}</span>
-                    </div>
-                    <span className="font-mono text-slate-500">{kb} KB</span>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
-
-          <div className="flex items-center justify-between p-2.5 rounded-xl bg-white/[0.02] border border-white/5">
-            <div className="flex items-center gap-2.5 overflow-hidden">
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs uppercase ${
-                isCreatorAdmin ? "bg-amber-500 text-slate-950 font-extrabold" : "bg-indigo-600 text-white"
-              }`}>
-                {currentUser.name ? currentUser.name[0] : "U"}
-              </div>
-              <div className="overflow-hidden">
-                <p className="text-xs font-semibold truncate">{currentUser.name}</p>
-                <p className={`text-[10px] uppercase tracking-wider ${isCreatorAdmin ? "text-amber-400 font-bold" : "text-slate-400"}`}>
-                  {isCreatorAdmin ? "Creator Admin" : "Member"}
-                </p>
-              </div>
-            </div>
-            <button 
-              onClick={handleSignOut}
-              title="Sign Out"
-              className="text-slate-400 hover:text-red-400 p-1.5 rounded-lg hover:bg-white/5 transition"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
-          </div>
+          <button 
+            onClick={handleSignOut}
+            title="Sign Out"
+            className="text-slate-400 hover:text-red-400 p-1.5 rounded-lg hover:bg-white/5 transition"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </aside>
 
-      {/* 2. CENTER CANVAS */}
+      {/* 2. USER CENTER WORKSPACE CANVAS */}
       <main className="flex-1 flex flex-col overflow-y-auto px-8 py-6">
-        <header className="flex items-center justify-between pb-6 border-b border-white/5 gap-4">
+        <header className="flex items-center justify-between pb-5 border-b border-white/10 gap-4">
           <div className="relative flex-1 max-w-md">
-            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
+            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              placeholder="Search filenames, categories, or AI summaries..."
+              placeholder="Search in SmartSorter & Linked Drive..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-[#162032] border border-white/5 rounded-xl pl-10 pr-4 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500/50 transition"
+              className="w-full bg-[#1e1f20] border border-white/10 rounded-full pl-10 pr-4 py-2 text-xs text-slate-200 placeholder-slate-400 focus:outline-none focus:border-[#8ab4f8] transition"
             />
           </div>
 
           <div className="flex items-center gap-2.5">
+            {summary.cloud_linked && (
+              <button
+                onClick={handleSyncCloudDrive}
+                disabled={isSyncingCloud}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 rounded-full text-xs font-semibold border border-emerald-500/30 transition"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? "animate-spin" : ""}`} />
+                <span>{isSyncingCloud ? "Sorting Drive..." : `Sync My Drive`}</span>
+              </button>
+            )}
+
             {summary.active_files_count > 0 && (
               <button
                 onClick={() => setFolderAiTarget(selectedFolder)}
-                title="Synthesize all files in current folder with Gemini"
-                className="flex items-center gap-1.5 px-3 py-2 bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 rounded-xl text-xs font-semibold border border-purple-500/30 transition"
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 rounded-full text-xs font-semibold border border-purple-500/30 transition"
               >
                 <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                <span>Ask Folder AI ({selectedFolder})</span>
+                <span>Ask Folder AI</span>
               </button>
             )}
 
             <button
               onClick={handleCreateCustomFolder}
-              title="Create a Custom Smart Folder"
-              className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold border border-white/10 transition"
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-[#1e1f20] hover:bg-white/10 text-slate-200 rounded-full text-xs font-semibold border border-white/10 transition"
             >
               <Plus className="w-3.5 h-3.5 text-emerald-400" />
               <span>New Folder</span>
             </button>
 
-            {summary.active_files_count > 0 && (
-              <button
-                onClick={(e) => handleExportFolderZip("All", e)}
-                title="Download All Active Files as ZIP"
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold border border-white/10 transition"
-              >
-                <Download className="w-3.5 h-3.5 text-amber-400" />
-                <span>Export All (.zip)</span>
-              </button>
-            )}
-            <button
-              onClick={fetchWorkspace}
-              title="Refresh Workspace"
-              className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl border border-white/10 transition"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
             <button
               onClick={() => setUploadModalOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-blue-600/25 transition active:scale-95"
+              className="flex items-center gap-2 px-4 py-2 bg-[#8ab4f8] hover:bg-blue-400 text-slate-950 rounded-full text-xs font-bold shadow-lg transition active:scale-95"
             >
               <Plus className="w-4 h-4" />
-              <span>Add Files</span>
+              <span>Upload / Sort</span>
             </button>
           </div>
         </header>
 
-        {/* Action / Share / Duplicate Toast Banner */}
         {uploadNotice && (
           <div className="mt-4 flex items-center justify-between rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-2.5 text-xs text-blue-300">
             <span className="truncate">{uploadNotice}</span>
@@ -1303,99 +1973,106 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 1: MAIN LIBRARY */}
-        {activeTab === "library" && (
+        {/* VIEWS: FILES & FOLDERS / RECENT / OFFLINE */}
+        {(activeTab === "library" || activeTab === "recent" || activeTab === "offline") && (
           <div className="mt-6">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 className="text-xl font-bold tracking-tight">Main Library</h2>
+                <h2 className="text-xl font-bold tracking-tight">
+                  {activeTab === "library" && "Files & Smart Folders"}
+                  {activeTab === "recent" && "Recent Activity & Files"}
+                  {activeTab === "offline" && "Offline Available Files"}
+                </h2>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Star priority files, synthesize entire folders with AI, or click any file to preview & share
+                  {activeTab === "library" && `Isolated workspace for ${currentUser.email} (${quotaDisplayLabel})`}
+                  {activeTab === "recent" && "Chronological stream of your most recently processed files"}
+                  {activeTab === "offline" && "Pinned documents cached for instant offline access"}
                 </p>
               </div>
 
-              {/* Sort & Starred Filter Controls */}
               <div className="flex items-center gap-2.5">
                 <button
                   type="button"
                   onClick={() => setStarredOnly(!starredOnly)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition ${
                     starredOnly
                       ? "bg-amber-500/20 border-amber-500/40 text-amber-300"
-                      : "bg-slate-900 border-white/10 text-slate-400 hover:text-white"
+                      : "bg-[#1e1f20] border-white/10 text-slate-400 hover:text-white"
                   }`}
                 >
                   <Star className={`w-3.5 h-3.5 ${starredOnly ? "fill-amber-400 text-amber-400" : ""}`} />
-                  <span>Starred Only</span>
+                  <span>Starred</span>
                 </button>
 
                 <select
                   value={sortBy}
                   onChange={(e) => setSortBy(e.target.value)}
-                  className="bg-slate-900 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none"
+                  className="bg-[#1e1f20] border border-white/10 rounded-full px-3 py-1.5 text-xs text-slate-200 focus:outline-none"
                 >
                   <option value="starred">Sort: Starred First</option>
-                  <option value="newest">Sort: Newest Uploaded</option>
-                  <option value="size">Sort: Largest Size (KB)</option>
-                  <option value="name">Sort: Filename (A–Z)</option>
+                  <option value="newest">Sort: Recent First</option>
+                  <option value="size">Sort: Size (KB)</option>
+                  <option value="name">Sort: Name (A–Z)</option>
                 </select>
               </div>
             </div>
 
-            <div className="mb-8">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Smart Folders</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
-                {folderEntries.length > 0 ? (
-                  folderEntries.map(([cat, count]) => (
-                    <div
-                      key={cat}
-                      onClick={() => setSelectedFolder(selectedFolder === cat ? "All" : cat)}
-                      className={`border rounded-xl p-3.5 flex items-center justify-between transition cursor-pointer group ${
-                        selectedFolder === cat 
-                          ? "bg-amber-500/20 border-amber-500/50 ring-1 ring-amber-500/30" 
-                          : "bg-amber-500/[0.06] border-amber-500/20 hover:border-amber-500/40"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 overflow-hidden">
-                        <Folder className="w-4 h-4 text-amber-400 shrink-0" />
-                        <span className="text-xs font-semibold text-amber-200 truncate">{cat}</span>
+            {activeTab === "library" && (
+              <div className="mb-8">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Smart Folders</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+                  {folderEntries.length > 0 ? (
+                    folderEntries.map(([cat, count]) => (
+                      <div
+                        key={cat}
+                        onClick={() => setSelectedFolder(selectedFolder === cat ? "All" : cat)}
+                        className={`border rounded-2xl p-3.5 flex items-center justify-between transition cursor-pointer group ${
+                          selectedFolder === cat 
+                            ? "bg-[#004a77]/60 border-[#8ab4f8]/60" 
+                            : "bg-[#1e1f20] border-white/5 hover:border-white/20"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 overflow-hidden">
+                          <Folder className="w-4 h-4 text-[#8ab4f8] shrink-0" />
+                          <span className="text-xs font-semibold text-slate-200 truncate">{cat}</span>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {count > 0 && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); setFolderAiTarget(cat); }}
+                                title={`Synthesize '${cat}'`}
+                                className="p-1 rounded-lg bg-purple-500/15 hover:bg-purple-500/35 text-purple-300 transition"
+                              >
+                                <Sparkles className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => handleExportFolderZip(cat, e)}
+                                title={`Download '${cat}' as ZIP`}
+                                className="p-1 rounded-lg bg-white/5 hover:bg-white/15 text-slate-300 transition"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          )}
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-white/10 text-slate-300">
+                            {count}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        {count > 0 && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); setFolderAiTarget(cat); }}
-                              title={`Ask Gemini AI about all files in '${cat}'`}
-                              className="p-1 rounded-lg bg-purple-500/15 hover:bg-purple-500/35 text-purple-300 transition"
-                            >
-                              <Sparkles className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => handleExportFolderZip(cat, e)}
-                              title={`Download '${cat}' folder as .zip`}
-                              className="p-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/30 text-amber-300 transition"
-                            >
-                              <Download className="w-3.5 h-3.5" />
-                            </button>
-                          </>
-                        )}
-                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300">
-                          {count}
-                        </span>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-xs text-slate-500 italic col-span-4">Upload documents or click "+ New Folder" to generate smart folders.</p>
-                )}
+                    ))
+                  ) : (
+                    <p className="text-xs text-slate-500 italic col-span-4">Upload documents or sync your personal Gmail Drive to generate smart folders.</p>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
 
             <div>
               <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">
-                Files ({displayedDocs.length})
+                {activeTab === "offline" ? "Offline Cached Files" : "Sorted Files"} ({displayedDocs.length})
               </h3>
               {displayedDocs.length > 0 ? (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3.5">
@@ -1403,55 +2080,72 @@ export default function App() {
                     <div
                       key={doc.id}
                       onClick={() => setPreviewDoc(doc)}
-                      className={`bg-[#151d2c] border rounded-xl p-4 flex flex-col items-center text-center transition group hover:-translate-y-1 shadow-sm relative cursor-pointer ${
-                        doc.is_starred ? "border-amber-500/40 ring-1 ring-amber-500/20" : "border-white/5 hover:border-blue-500/40"
+                      className={`bg-[#1e1f20] border rounded-2xl p-4 flex flex-col items-center text-center transition group hover:-translate-y-1 shadow-sm relative cursor-pointer ${
+                        doc.is_starred ? "border-amber-500/40" : "border-white/5 hover:border-[#8ab4f8]/50"
                       }`}
                     >
-                      {/* Top-Left Star Button */}
-                      <button
-                        type="button"
-                        onClick={(e) => handleToggleStar(doc.id, e)}
-                        title={doc.is_starred ? "Unstar File" : "Star / Pin File"}
-                        className="absolute top-2.5 left-2.5 p-1 rounded-lg hover:bg-white/10 transition"
-                      >
-                        <Star
-                          className={`w-3.5 h-3.5 ${
-                            doc.is_starred ? "fill-amber-400 text-amber-400" : "text-slate-600 group-hover:text-slate-400"
-                          }`}
-                        />
-                      </button>
+                      <div className="absolute top-2.5 left-2.5 flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={(e) => handleToggleStar(doc.id, e)}
+                          title="Star File"
+                          className="p-1 rounded-lg hover:bg-white/10 transition"
+                        >
+                          <Star
+                            className={`w-3.5 h-3.5 ${
+                              doc.is_starred ? "fill-amber-400 text-amber-400" : "text-slate-500"
+                            }`}
+                          />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => handleToggleOffline(doc.id, e)}
+                          title={doc.is_offline ? "Available Offline" : "Make Available Offline"}
+                          className="p-1 rounded-lg hover:bg-white/10 transition"
+                        >
+                          <CheckCircle2
+                            className={`w-3.5 h-3.5 ${
+                              doc.is_offline ? "text-emerald-400" : "text-slate-600"
+                            }`}
+                          />
+                        </button>
+                      </div>
 
-                      {/* Top-Right Hover Actions */}
                       <div className="absolute top-2.5 right-2.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
                         <button
                           type="button"
                           onClick={(e) => handleShareDocument(doc.id, e)}
-                          title="Copy Shareable File Link"
+                          title="Copy Share Link"
                           className="p-1.5 rounded-lg bg-slate-900/90 hover:bg-purple-600 text-slate-300 hover:text-white border border-white/10"
                         >
                           <Share2 className="w-3.5 h-3.5" />
                         </button>
                         <button
                           type="button"
-                          onClick={(e) => { e.stopPropagation(); handleDownloadFile(doc.id); }}
-                          title="Download File"
-                          className="p-1.5 rounded-lg bg-slate-900/90 hover:bg-emerald-600 text-slate-300 hover:text-white border border-white/10"
+                          onClick={(e) => { e.stopPropagation(); handleDeleteSingle(doc.id, doc.filename, false); }}
+                          title="Move to Bin"
+                          className="p-1.5 rounded-lg bg-slate-900/90 hover:bg-red-600 text-slate-300 hover:text-white border border-white/10"
                         >
-                          <Download className="w-3.5 h-3.5" />
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
 
-                      <div className="w-12 h-12 rounded-xl bg-white/[0.03] border border-white/5 flex items-center justify-center mb-3 mt-2 group-hover:scale-105 transition">
+                      <div className="w-12 h-12 rounded-2xl bg-white/[0.04] border border-white/5 flex items-center justify-center mb-3 mt-3 group-hover:scale-105 transition">
                         {getFileIcon(doc.filename)}
                       </div>
                       <p className="text-xs font-semibold text-slate-200 w-full truncate mb-1" title={doc.filename}>
                         {doc.filename}
                       </p>
-                      <span className="text-[10px] text-amber-400/90 font-semibold mb-1">
-                        {doc.category} • {doc.size_kb} KB
+                      <div className="flex items-center justify-center gap-1.5 text-[10px] text-[#8ab4f8] font-medium mb-1">
+                        <span>{doc.category}</span>
+                        <span>•</span>
+                        <span>{doc.size_kb} KB</span>
+                      </div>
+                      <span className="text-[9px] px-2 py-0.5 rounded-full bg-white/5 text-slate-400 mb-1 truncate max-w-full">
+                        {doc.storage_source}
                       </span>
                       {doc.summary && (
-                        <p className="text-[10px] text-slate-400 line-clamp-2 leading-relaxed mt-0.5" title={doc.summary}>
+                        <p className="text-[10px] text-slate-400 line-clamp-2 leading-relaxed mt-0.5">
                           {doc.summary}
                         </p>
                       )}
@@ -1461,177 +2155,125 @@ export default function App() {
               ) : (
                 <div className="border border-dashed border-white/10 rounded-2xl p-12 text-center">
                   <UploadCloud className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-                  <p className="text-sm text-slate-400 font-medium">No documents found in this view</p>
+                  <p className="text-sm text-slate-400 font-medium">
+                    {activeTab === "offline"
+                      ? "No files marked for Offline access yet. Click the checkmark icon on any file card!"
+                      : "No documents uploaded in your account yet."}
+                  </p>
                 </div>
               )}
             </div>
           </div>
         )}
 
-        {/* TAB 2: DRIVE CATALOG */}
-        {activeTab === "drive" && (
-          <div className="mt-6">
-            <div className="flex items-center justify-between mb-4">
+        {/* VIEW: UPLOADS */}
+        {activeTab === "uploads" && (
+          <div className="mt-6 space-y-6">
+            <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-xl font-bold tracking-tight">Drive File Catalog</h2>
-                <p className="text-xs text-slate-400 mt-0.5">Star, share tokenized links, move folders, or verify SHA-256 hashes</p>
+                <h2 className="text-xl font-bold tracking-tight">Uploads & Personal Drive Sync</h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Upload local files (100 MB Free Quota) or sync directly from your verified login Gmail Drive ({currentUser.email})
+                </p>
               </div>
-
-              <div className="flex items-center gap-3">
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                  className="bg-slate-900 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none"
-                >
-                  <option value="Active">Active Files</option>
-                  <option value="Deleted">Trash / Deleted</option>
-                  <option value="All">All Documents</option>
-                </select>
-
+              <div className="flex gap-2.5">
+                {summary.cloud_linked ? (
+                  <button
+                    onClick={handleSyncCloudDrive}
+                    disabled={isSyncingCloud}
+                    className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-full text-xs font-bold transition"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? "animate-spin" : ""}`} />
+                    <span>Sync {currentUser.email} Drive</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setCloudModalOpen(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-[#004a77] hover:bg-[#005a92] text-[#c2e7ff] rounded-full text-xs font-bold transition"
+                  >
+                    <Cloud className="w-3.5 h-3.5" />
+                    <span>Link {currentUser.email} Drive</span>
+                  </button>
+                )}
                 <button
-                  onClick={handleSoftDeleteAll}
-                  title="Move all active files to trash"
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 text-amber-400 rounded-xl text-xs font-semibold transition"
+                  onClick={() => setUploadModalOpen(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-[#8ab4f8] text-slate-950 rounded-full text-xs font-bold"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>Move All to Trash</span>
-                </button>
-
-                <button
-                  onClick={handleHardDeleteAll}
-                  title="Purge all records permanently from SQLite database"
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 text-red-400 rounded-xl text-xs font-semibold transition"
-                >
-                  <X className="w-3.5 h-3.5" />
-                  <span>Purge SQLite DB</span>
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>New Upload Batch</span>
                 </button>
               </div>
             </div>
 
-            <div className="rounded-xl border border-white/5 bg-[#151d2c] overflow-hidden">
+            <div className="rounded-2xl border border-white/10 bg-[#1e1f20] overflow-hidden">
               <table className="w-full text-left text-xs">
-                <thead className="bg-slate-900/60 text-slate-400 uppercase text-[10px] tracking-wider border-b border-white/5">
+                <thead className="bg-black/20 text-slate-400 uppercase text-[10px] tracking-wider border-b border-white/10">
                   <tr>
-                    <th className="py-3 px-4">Document & AI Summary</th>
-                    <th className="py-3 px-4">Folder (Override)</th>
-                    <th className="py-3 px-4">Size / Hash</th>
-                    <th className="py-3 px-4">Status</th>
-                    <th className="py-3 px-4">Processed Date</th>
+                    <th className="py-3 px-4">Filename & Summary</th>
+                    <th className="py-3 px-4">Sorted Folder</th>
+                    <th className="py-3 px-4">Storage Source</th>
+                    <th className="py-3 px-4">Size / SHA-256</th>
+                    <th className="py-3 px-4">Uploaded Time</th>
                     <th className="py-3 px-4 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5 text-slate-300">
                   {documents.length > 0 ? (
                     documents.map((d) => (
-                      <tr key={d.id} className="hover:bg-white/[0.02] transition">
+                      <tr key={d.id} className="hover:bg-white/[0.02]">
                         <td className="py-3 px-4 max-w-xs">
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={(e) => handleToggleStar(d.id, e)}
-                              className="text-slate-500 hover:text-amber-400"
-                            >
-                              <Star className={`w-3.5 h-3.5 ${d.is_starred ? "fill-amber-400 text-amber-400" : ""}`} />
-                            </button>
-                            <p className="font-semibold text-slate-200 truncate">{d.filename}</p>
-                          </div>
-                          {d.summary && (
-                            <p className="text-[11px] text-slate-500 italic truncate mt-0.5 pl-5" title={d.summary}>
-                              {d.summary}
-                            </p>
-                          )}
+                          <p className="font-semibold text-slate-100 truncate">{d.filename}</p>
+                          <p className="text-[11px] text-slate-400 truncate">{d.summary}</p>
                         </td>
                         <td className="py-3 px-4">
                           <select
                             value={d.category}
                             onChange={(e) => handleCategoryChange(d.id, e.target.value)}
-                            className="bg-slate-900/90 border border-white/10 rounded-lg px-2.5 py-1 text-xs text-amber-300 font-medium focus:border-blue-500 focus:outline-none cursor-pointer"
+                            className="bg-[#131314] border border-white/10 rounded-lg px-2.5 py-1 text-xs text-[#8ab4f8] font-medium"
                           >
-                            {allCategoryOptions.map((catOpt) => (
-                              <option key={catOpt} value={catOpt}>
-                                {catOpt}
-                              </option>
+                            {allCategoryOptions.map((cOpt) => (
+                              <option key={cOpt} value={cOpt}>{cOpt}</option>
                             ))}
-                            <option value="__NEW_CUSTOM__">+ New Custom Folder...</option>
+                            <option value="__NEW_CUSTOM__">+ Custom Folder...</option>
                           </select>
                         </td>
-                        <td className="py-3 px-4 whitespace-nowrap">
-                          <p className="text-slate-300">{d.size_kb} KB</p>
-                          {d.file_hash && (
-                            <p className="text-[10px] font-mono text-slate-500" title="SHA-256 Checksum">
-                              #{d.file_hash}
-                            </p>
-                          )}
-                        </td>
                         <td className="py-3 px-4">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            d.status === "Active" ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400"
-                          }`}>
-                            {d.status}
+                          <span className="px-2.5 py-1 rounded-full text-[10px] font-semibold bg-blue-500/15 text-blue-300">
+                            {d.storage_source}
                           </span>
                         </td>
-                        <td className="py-3 px-4 font-mono text-xs text-slate-300 whitespace-nowrap">
-                          {formatTimestamp(d.created_at)}
+                        <td className="py-3 px-4 font-mono text-[11px]">
+                          {d.size_kb} KB {d.file_hash && <span className="text-slate-500">• #{d.file_hash}</span>}
                         </td>
-                        
-                        <td className="py-3 px-4 text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              onClick={() => setPreviewDoc(d)}
-                              title="Preview & Ask Gemini"
-                              className="p-1.5 rounded-lg bg-white/5 hover:bg-blue-500/20 text-slate-400 hover:text-blue-400 transition"
-                            >
-                              <Eye className="w-3.5 h-3.5" />
-                            </button>
-
-                            <button
-                              onClick={(e) => handleShareDocument(d.id, e)}
-                              title="Copy Shareable Link"
-                              className="p-1.5 rounded-lg bg-white/5 hover:bg-purple-500/20 text-slate-400 hover:text-purple-400 transition"
-                            >
-                              <Share2 className="w-3.5 h-3.5" />
-                            </button>
-
-                            <button
-                              onClick={() => handleDownloadFile(d.id)}
-                              title="Download File"
-                              className="p-1.5 rounded-lg bg-white/5 hover:bg-emerald-500/20 text-slate-400 hover:text-emerald-400 transition"
-                            >
-                              <Download className="w-3.5 h-3.5" />
-                            </button>
-
-                            {d.status === "Active" ? (
-                              <button
-                                onClick={() => handleDeleteSingle(d.id, d.filename, false)}
-                                title="Move to Trash (Soft Delete)"
-                                className="p-1.5 rounded-lg bg-white/5 hover:bg-amber-500/20 text-slate-400 hover:text-amber-400 transition"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => handleRestoreSingle(d.id)}
-                                title="Restore File to Active"
-                                className="p-1.5 rounded-lg bg-white/5 hover:bg-emerald-500/20 text-slate-400 hover:text-emerald-400 transition"
-                              >
-                                <RotateCcw className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                            
-                            <button
-                              onClick={() => handleDeleteSingle(d.id, d.filename, true)}
-                              title="Delete Permanently from Database"
-                              className="p-1.5 rounded-lg bg-white/5 hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                        <td className="py-3 px-4 text-slate-400">{formatTimestamp(d.created_at)}</td>
+                        <td className="py-3 px-4 text-right space-x-1.5">
+                          <button
+                            onClick={() => setPreviewDoc(d)}
+                            className="p-1.5 rounded-lg bg-white/5 hover:bg-blue-500/20 text-slate-300"
+                            title="Preview"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleToggleOffline(d.id)}
+                            className={`p-1.5 rounded-lg bg-white/5 ${d.is_offline ? "text-emerald-400" : "text-slate-400"}`}
+                            title="Toggle Offline"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleToggleSpam(d.id)}
+                            className="p-1.5 rounded-lg bg-white/5 hover:bg-amber-500/20 text-slate-400 hover:text-amber-300"
+                            title="Mark as Spam"
+                          >
+                            <AlertOctagon className="w-3.5 h-3.5" />
+                          </button>
                         </td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-slate-500 italic">No files in catalog.</td>
+                      <td colSpan={6} className="py-8 text-center text-slate-500 italic">No uploads recorded yet.</td>
                     </tr>
                   )}
                 </tbody>
@@ -1640,59 +2282,63 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 3: AUDIT & USER LOGINS (NORAGAMI ADMIN) */}
-        {activeTab === "audit" && isCreatorAdmin && (
-          <div className="mt-6">
-            <div className="flex items-center justify-between mb-4">
+        {/* VIEW: BIN */}
+        {activeTab === "bin" && (
+          <div className="mt-6 space-y-4">
+            <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-xl font-bold tracking-tight mb-1">System & User Login Audit</h2>
-                <p className="text-xs text-slate-400">Restricted chronological log of all platform interactions</p>
+                <h2 className="text-xl font-bold tracking-tight">Bin</h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Restore soft-deleted files to your workspace or permanently wipe them
+                </p>
               </div>
-              <div className="flex items-center gap-2.5">
+              {documents.length > 0 && (
                 <button
-                  onClick={handleExportAuditCsv}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl text-xs font-bold shadow-md transition"
+                  onClick={handleHardDeleteAll}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-red-500/15 hover:bg-red-500/25 text-red-300 rounded-full text-xs font-bold border border-red-500/30 transition"
                 >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Export Audit CSV</span>
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Empty Bin Permanently</span>
                 </button>
-                <button
-                  onClick={fetchWorkspace}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold border border-white/10 transition"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Refresh Audit Logs</span>
-                </button>
-              </div>
+              )}
             </div>
 
-            <div className="rounded-xl border border-white/5 bg-[#151d2c] overflow-hidden">
+            <div className="rounded-2xl border border-white/10 bg-[#1e1f20] overflow-hidden">
               <table className="w-full text-left text-xs">
-                <thead className="bg-slate-900/60 text-slate-400 uppercase text-[10px] tracking-wider border-b border-white/5">
+                <thead className="bg-black/20 text-slate-400 uppercase text-[10px] border-b border-white/10">
                   <tr>
-                    <th className="py-3 px-4">Timestamp</th>
-                    <th className="py-3 px-4">User</th>
-                    <th className="py-3 px-4">Event Type</th>
-                    <th className="py-3 px-4">Metadata</th>
+                    <th className="py-3 px-4">Filename</th>
+                    <th className="py-3 px-4">Original Folder</th>
+                    <th className="py-3 px-4">Size</th>
+                    <th className="py-3 px-4 text-right">Restore / Delete Forever</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/5 text-slate-300">
-                  {activity.length > 0 ? (
-                    activity.map((act) => (
-                      <tr key={act.id} className="hover:bg-white/[0.02]">
-                        <td className="py-3 px-4 whitespace-nowrap">
-                          <span className="font-mono text-xs font-semibold text-slate-200 bg-slate-900/80 px-2.5 py-1 rounded-md border border-white/10 whitespace-nowrap">
-                            {formatTimestamp(act.timestamp)}
-                          </span>
+                <tbody className="divide-y divide-white/5">
+                  {documents.length > 0 ? (
+                    documents.map((d) => (
+                      <tr key={d.id}>
+                        <td className="py-3 px-4 font-semibold text-slate-200">{d.filename}</td>
+                        <td className="py-3 px-4 text-slate-400">{d.category}</td>
+                        <td className="py-3 px-4 text-slate-400">{d.size_kb} KB</td>
+                        <td className="py-3 px-4 text-right space-x-2">
+                          <button
+                            onClick={() => handleRestoreSingle(d.id)}
+                            className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-semibold hover:bg-emerald-500/30"
+                          >
+                            Restore
+                          </button>
+                          <button
+                            onClick={() => handleDeleteSingle(d.id, d.filename, true)}
+                            className="px-3 py-1 rounded-full bg-red-500/20 text-red-300 text-xs font-semibold hover:bg-red-500/30"
+                          >
+                            Delete Forever
+                          </button>
                         </td>
-                        <td className="py-3 px-4 font-semibold text-slate-200">{act.username}</td>
-                        <td className="py-3 px-4 text-amber-400">{act.action}</td>
-                        <td className="py-3 px-4 text-slate-400 italic">{act.details || "—"}</td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={4} className="py-8 text-center text-slate-500 italic">No system activity logged yet.</td>
+                      <td colSpan={4} className="py-12 text-center text-slate-500 italic">Your Bin is empty.</td>
                     </tr>
                   )}
                 </tbody>
@@ -1701,177 +2347,433 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 4: CREATOR ADMIN USER OVERSIGHT (WITH ACTIVE/SUSPENDED CONTROL) */}
-        {activeTab === "admin" && isCreatorAdmin && (
+        {/* VIEW: SPAM */}
+        {activeTab === "spam" && (
+          <div className="mt-6 space-y-4">
+            <div>
+              <h2 className="text-xl font-bold tracking-tight">Spam & Duplicate Quarantine</h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                SHA-256 duplicate uploads and flagged files are automatically isolated here so they do not consume your quota
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-[#1e1f20] overflow-hidden">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-black/20 text-slate-400 uppercase text-[10px] border-b border-white/10">
+                  <tr>
+                    <th className="py-3 px-4">Quarantined File</th>
+                    <th className="py-3 px-4">Reason / SHA-256 Detection</th>
+                    <th className="py-3 px-4">Size</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {documents.length > 0 ? (
+                    documents.map((d) => (
+                      <tr key={d.id}>
+                        <td className="py-3 px-4 font-semibold text-amber-300">{d.filename}</td>
+                        <td className="py-3 px-4 text-slate-400">{d.summary}</td>
+                        <td className="py-3 px-4 text-slate-400">{d.size_kb} KB</td>
+                        <td className="py-3 px-4 text-right space-x-2">
+                          <button
+                            onClick={() => handleToggleSpam(d.id)}
+                            className="px-3 py-1 rounded-full bg-blue-500/20 text-blue-300 text-xs font-semibold"
+                          >
+                            Not Spam (Restore)
+                          </button>
+                          <button
+                            onClick={() => handleDeleteSingle(d.id, d.filename, true)}
+                            className="px-3 py-1 rounded-full bg-red-500/20 text-red-300 text-xs font-semibold"
+                          >
+                            Purge
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={4} className="py-12 text-center text-slate-500 italic">
+                        No spam or duplicate files in quarantine.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW: STORAGE & IDENTITY-BOUND GMAIL DRIVE BRIDGE */}
+        {activeTab === "storage" && (
           <div className="mt-6 space-y-6">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-xl font-bold tracking-tight">System & Account Oversight</h2>
-                <p className="text-xs text-slate-400 mt-0.5">Live platform account breakdown and interactive member access governance</p>
+                <h2 className="text-xl font-bold tracking-tight">Personal Storage & Identity-Bound Gmail Bridge</h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Every Free user receives an isolated 100 MB workspace. Link your login Gmail ({currentUser.email}) to sort directly inside your own Google Drive.
+                </p>
               </div>
               <button
-                onClick={fetchWorkspace}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold border border-white/10 transition"
+                onClick={() => setCloudModalOpen(true)}
+                className="px-4 py-2 rounded-full bg-[#8ab4f8] text-slate-950 text-xs font-bold"
               >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Refresh Metrics</span>
+                {summary.cloud_linked ? "Manage Linked Drive" : `Link ${currentUser.email}`}
               </button>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-[#151d2c] border border-white/5 p-4 rounded-xl">
-                <p className="text-[11px] text-slate-400 uppercase font-semibold">User Accounts</p>
-                <p className="text-2xl font-bold text-blue-400 mt-1">{adminData.member_count}</p>
-                <p className="text-[10px] text-slate-500 mt-0.5">{adminData.total_accounts} Total Accounts</p>
-              </div>
+            <div className="p-6 rounded-2xl bg-[#1e1f20] border border-white/10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+              <div className="space-y-2 flex-1">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <Cloud className="w-6 h-6 text-[#8ab4f8]" />
+                  <span className="text-base font-bold">
+                    {summary.cloud_linked
+                      ? `${summary.cloud_provider} Bound to ${currentUser.email}`
+                      : `Local 100 MB Quota (${currentUser.email})`}
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/20 text-blue-300">
+                    Plan: {summary.subscription_plan}
+                  </span>
+                  {summary.cloud_linked && summary.drive_binding_hash && (
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                      🔒 Binding #{summary.drive_binding_hash}
+                    </span>
+                  )}
+                </div>
 
-              <div className="bg-[#151d2c] border border-white/5 p-4 rounded-xl">
-                <p className="text-[11px] text-slate-400 uppercase font-semibold">Admin Accounts</p>
-                <p className="text-2xl font-bold text-amber-400 mt-1">{adminData.admin_count}</p>
-                <p className="text-[10px] text-emerald-400 mt-0.5 font-medium">● 1 Active Creator</p>
-              </div>
-
-              <div className="bg-[#151d2c] border border-white/5 p-4 rounded-xl">
-                <p className="text-[11px] text-slate-400 uppercase font-semibold">Classified (Lifetime)</p>
-                <p className="text-2xl font-bold text-white mt-1">{adminData.total_files_classified}</p>
-                <p className="text-[10px] text-slate-500 mt-0.5">
-                  {adminData.active_files} Active • {adminData.deleted_files} in Trash
+                <p className="text-xs text-slate-400">
+                  {summary.cloud_linked
+                    ? `Security Verified: Only your login account (${currentUser.email}) is permitted to sync and sort files in this workspace.`
+                    : `You are currently using your isolated 100 MB Free Quota. Cross-account Gmail linking is strictly blocked for security.`}
                 </p>
+
+                <div className="pt-2 max-w-lg">
+                  <div className="flex justify-between text-xs mb-1.5">
+                    <span className="text-slate-300 font-medium">
+                      {quotaDisplayLabel} ({summary.total_storage_kb} KB calculated from {summary.active_files_count} files)
+                    </span>
+                    <span className="text-[#8ab4f8] font-bold">{storagePercent}%</span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-[#8ab4f8] rounded-full transition-all duration-300"
+                      style={{ width: `${storagePercent}%` }}
+                    />
+                  </div>
+                </div>
               </div>
 
-              <div className="bg-[#151d2c] border border-white/5 p-4 rounded-xl">
-                <p className="text-[11px] text-slate-400 uppercase font-semibold">Cloud Storage</p>
-                <p className="text-2xl font-bold text-emerald-400 mt-1">{adminData.total_storage_mb} MB</p>
-                <p className="text-[10px] text-slate-500 mt-0.5">Active Disk Usage</p>
-              </div>
+              {summary.cloud_linked && (
+                <div className="flex items-center gap-2.5">
+                  <button
+                    onClick={handleSyncCloudDrive}
+                    disabled={isSyncingCloud}
+                    className="px-4 py-2 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold"
+                  >
+                    {isSyncingCloud ? "Sorting..." : "Sync & Sort My Drive"}
+                  </button>
+                  <button
+                    onClick={handleUnlinkCloudDrive}
+                    className="px-4 py-2 rounded-full border border-red-500/40 text-red-300 text-xs font-semibold hover:bg-red-500/10"
+                  >
+                    Unlink
+                  </button>
+                </div>
+              )}
             </div>
 
-            <div className="rounded-xl border border-white/5 bg-[#151d2c] overflow-hidden">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-900/60 text-slate-400 uppercase text-[10px] tracking-wider border-b border-white/5">
-                  <tr>
-                    <th className="py-3 px-4">Account Name</th>
-                    <th className="py-3 px-4">Email ID</th>
-                    <th className="py-3 px-4">Role</th>
-                    <th className="py-3 px-4">Status</th>
-                    <th className="py-3 px-4">Files Classified</th>
-                    <th className="py-3 px-4">Active Disk</th>
-                    <th className="py-3 px-4 text-right">Governance</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5 text-slate-300">
-                  {adminData.users && adminData.users.length > 0 ? (
-                    adminData.users.map((u) => (
-                      <tr key={u.id} className="hover:bg-white/[0.02]">
-                        <td className="py-3 px-4 font-semibold text-slate-200">{u.name}</td>
-                        <td className="py-3 px-4 text-slate-400">{u.email}</td>
-                        <td className="py-3 px-4">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            u.role === "ADMIN" ? "bg-amber-500/20 text-amber-300" : "bg-blue-500/20 text-blue-300"
-                          }`}>
-                            {u.role === "ADMIN" ? "CREATOR ADMIN" : "MEMBER"}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
-                            u.status === "Suspended"
-                              ? "bg-red-500/10 text-red-400 border-red-500/20"
-                              : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                          }`}>
-                            {u.status || "Active"}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4">
-                          <span className="font-semibold text-white">{u.total_classified ?? 0}</span>
-                          <span className="text-[10px] text-slate-500 ml-1.5">
-                            ({u.active_files ?? 0} active, {u.deleted_files ?? 0} trash)
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 font-mono text-slate-400">{u.storage_kb} KB</td>
-                        <td className="py-3 px-4 text-right">
-                          {u.email.toLowerCase() !== CREATOR_EMAIL.toLowerCase() ? (
-                            <button
-                              type="button"
-                              onClick={() => handleToggleUserStatus(u)}
-                              className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition ${
-                                u.status === "Suspended"
-                                  ? "bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300"
-                                  : "bg-red-500/20 hover:bg-red-500/30 text-red-300"
-                              }`}
-                            >
-                              {u.status === "Suspended" ? "Activate User" : "Suspend User"}
-                            </button>
-                          ) : (
-                            <span className="text-[10px] text-slate-500 italic">Protected</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={7} className="py-8 text-center text-slate-500 italic">No registered users found.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+            <div>
+              <h3 className="text-sm font-bold mb-3">Database & Personal Drive Bridge Maintenance Plans</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="p-5 rounded-2xl bg-[#1e1f20] border border-white/10 flex flex-col justify-between">
+                  <div>
+                    <p className="text-xs font-bold uppercase text-slate-400">Starter Sandbox</p>
+                    <h4 className="text-xl font-bold mt-1">Free (100 MB)</h4>
+                    <p className="text-[11px] text-slate-400 mt-1">Isolated 100 MB per-user quota</p>
+                    <ul className="mt-4 space-y-2 text-xs text-slate-300">
+                      <li>✓ 100 MB isolated workspace storage</li>
+                      <li>✓ Extension & Gemini AI file sorting</li>
+                      <li>✗ Personal Gmail Drive auto-bridge</li>
+                      <li>✗ Automated Drive background sorting</li>
+                    </ul>
+                  </div>
+                  <button
+                    disabled={summary.subscription_plan === "Free"}
+                    onClick={() => handleActivateSubscription("Free")}
+                    className="mt-6 w-full py-2 rounded-full border border-white/15 text-xs font-semibold disabled:opacity-40"
+                  >
+                    {summary.subscription_plan === "Free" ? "Current Plan" : "Switch to Free (100 MB)"}
+                  </button>
+                </div>
+
+                <div className="p-5 rounded-2xl bg-[#1e1f20] border-2 border-[#8ab4f8] flex flex-col justify-between relative">
+                  <span className="absolute -top-2.5 right-4 px-2.5 py-0.5 rounded-full bg-[#8ab4f8] text-slate-950 text-[10px] font-bold">
+                    RECOMMENDED
+                  </span>
+                  <div>
+                    <p className="text-xs font-bold uppercase text-[#8ab4f8]">Cloud Bridge Pro</p>
+                    <h4 className="text-xl font-bold mt-1">₹199 / month</h4>
+                    <p className="text-[11px] text-slate-400 mt-1">Connect Your Registered Gmail Drive</p>
+                    <ul className="mt-4 space-y-2 text-xs text-slate-200">
+                      <li>✓ Strictly binds your login Gmail ({currentUser.email})</li>
+                      <li>✓ Sorts uploaded files directly in your personal Drive</li>
+                      <li>✓ Dynamic storage calculation upon login</li>
+                      <li>✓ Full SQLite WAL metadata & hash maintenance</li>
+                    </ul>
+                  </div>
+                  <button
+                    onClick={() => handleActivateSubscription("Cloud Bridge Pro")}
+                    className="mt-6 w-full py-2 rounded-full bg-[#8ab4f8] hover:bg-blue-400 text-slate-950 text-xs font-bold transition"
+                  >
+                    {summary.subscription_plan === "Cloud Bridge Pro" ? "✓ Active Plan" : "Subscribe & Unlock Gmail Bridge"}
+                  </button>
+                </div>
+
+                <div className="p-5 rounded-2xl bg-[#1e1f20] border border-purple-500/40 flex flex-col justify-between">
+                  <div>
+                    <p className="text-xs font-bold uppercase text-purple-400">Enterprise Auto-Sort</p>
+                    <h4 className="text-xl font-bold mt-1">₹499 / month</h4>
+                    <p className="text-[11px] text-slate-400 mt-1">High-Rate Multimodal AI + Priority SLA</p>
+                    <ul className="mt-4 space-y-2 text-xs text-slate-300">
+                      <li>✓ Cryptographic 1-to-1 Gmail Drive binding</li>
+                      <li>✓ Priority high-rate Gemini 2.5 Flash synthesis</li>
+                      <li>✓ Automated SHA-256 duplicate quarantine</li>
+                      <li>✓ Dedicated database maintenance & audit SLA</li>
+                    </ul>
+                  </div>
+                  <button
+                    onClick={() => handleActivateSubscription("Enterprise Auto-Sort")}
+                    className="mt-6 w-full py-2 rounded-full bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition"
+                  >
+                    {summary.subscription_plan === "Enterprise Auto-Sort" ? "✓ Active Plan" : "Upgrade to Enterprise"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW: SETTINGS */}
+        {activeTab === "settings" && (
+          <div className="mt-6 max-w-2xl space-y-6">
+            <div>
+              <h2 className="text-xl font-bold tracking-tight">Settings & Security Policy</h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Configure SmartSorter extension rules and verify your account identity binding
+              </p>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-[#1e1f20] border border-white/10 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-semibold">Strict 1-to-1 Gmail-to-Drive Identity Lock</p>
+                  <p className="text-xs text-slate-400">
+                    Blocks linking any external Google Drive that does not match your login email ({currentUser.email})
+                  </p>
+                </div>
+                <span className="text-xs font-bold text-emerald-400">🔒 Enforced</span>
+              </div>
+
+              <div className="flex items-center justify-between pt-3 border-t border-white/5">
+                <div>
+                  <p className="text-sm font-semibold">Auto-Sort Linked Drive by Extension & AI</p>
+                  <p className="text-xs text-slate-400">Automatically route PDFs, code, and images into Smart Folders</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={autoSortExt}
+                  onChange={(e) => setAutoSortExt(e.target.checked)}
+                  className="w-4 h-4 accent-[#8ab4f8]"
+                />
+              </div>
+
+              <div className="flex items-center justify-between pt-3 border-t border-white/5">
+                <div>
+                  <p className="text-sm font-semibold">Generate 1-Line Gemini AI Summaries</p>
+                  <p className="text-xs text-slate-400">Create concise content summaries for every ingested file</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={aiDeepSummary}
+                  onChange={(e) => setAiDeepSummary(e.target.checked)}
+                  className="w-4 h-4 accent-[#8ab4f8]"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW: HELP AND FEEDBACK (USERS SEE CREATOR REPLIES HERE) */}
+        {activeTab === "help" && (
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="p-6 rounded-2xl bg-[#1e1f20] border border-white/10 space-y-4">
+              <h3 className="text-base font-bold">Submit Support Request or Issue</h3>
+              <p className="text-xs text-slate-400">
+                Need help with your 100 MB quota, Cloud Bridge, or sorting rules? Submit a ticket directly to the Project Creator.
+              </p>
+
+              <form onSubmit={handleSubmitFeedback} className="space-y-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-300">Issue Category</label>
+                  <select
+                    value={fbCategory}
+                    onChange={(e) => setFbCategory(e.target.value)}
+                    className="mt-1 w-full rounded-xl bg-[#131314] border border-white/10 px-3 py-2 text-xs text-white"
+                  >
+                    <option value="Cloud Drive Sync">Cloud Drive Sync</option>
+                    <option value="Subscription & Billing">Subscription & Billing</option>
+                    <option value="AI Classification Issue">AI Classification Issue</option>
+                    <option value="Bug Report">Bug Report</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-slate-300">Describe Your Issue</label>
+                  <textarea
+                    rows={4}
+                    required
+                    value={fbMessage}
+                    onChange={(e) => setFbMessage(e.target.value)}
+                    placeholder="Explain what happened so the Creator can resolve it..."
+                    className="mt-1 w-full rounded-xl bg-[#131314] border border-white/10 p-3 text-xs text-white focus:outline-none focus:border-[#8ab4f8]"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="px-5 py-2.5 rounded-full bg-[#8ab4f8] text-slate-950 text-xs font-bold"
+                >
+                  Send to Creator Support Desk
+                </button>
+              </form>
+            </div>
+
+            <div className="p-6 rounded-2xl bg-[#1e1f20] border border-white/10 space-y-3">
+              <h3 className="text-base font-bold">My Support Tickets & Creator Responses ({feedbackList.length})</h3>
+              <p className="text-xs text-slate-400">
+                Track the status of your reported issues and read replies from the Project Creator.
+              </p>
+              <div className="space-y-3 max-h-80 overflow-y-auto pt-2 pr-1">
+                {feedbackList.length > 0 ? (
+                  feedbackList.map((fb) => (
+                    <div key={fb.id} className="p-3.5 rounded-xl bg-black/25 border border-white/10 text-xs space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[#8ab4f8] font-bold">#{fb.id} • {fb.category}</span>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          fb.status === "Resolved"
+                            ? "bg-emerald-500/20 text-emerald-300"
+                            : "bg-amber-500/20 text-amber-300"
+                        }`}>
+                          {fb.status || "Open"}
+                        </span>
+                      </div>
+                      <p className="text-slate-200">{fb.message}</p>
+                      {fb.admin_reply ? (
+                        <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-200">
+                          <p className="text-[10px] font-bold uppercase text-emerald-400 mb-0.5">
+                            ✓ Creator Reply:
+                          </p>
+                          <p>{fb.admin_reply}</p>
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-slate-500 italic">Awaiting response from Creator...</p>
+                      )}
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-xs text-slate-500 italic py-8 text-center">
+                    You have not submitted any support tickets yet.
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         )}
       </main>
 
-      {/* 3. RIGHT STREAM PANEL */}
-      <aside className="w-80 border-l border-white/5 bg-[#111827]/40 flex flex-col p-5 backdrop-blur-md shrink-0">
-        <h3 className="text-sm font-bold tracking-tight mb-4 flex items-center gap-2">
-          <span>{isCreatorAdmin ? "System Audit Feed" : "My Upload Activity"}</span>
-          <span className={`w-2 h-2 rounded-full animate-pulse ${isCreatorAdmin ? "bg-amber-400" : "bg-blue-400"}`} />
-        </h3>
+      {/* MODAL: STRICT IDENTITY-LOCKED GMAIL DRIVE LINKING */}
+      {cloudModalOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#1e1f20] border border-white/10 rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
+            <button
+              onClick={() => setCloudModalOpen(false)}
+              className="absolute right-4 top-4 text-slate-400 hover:text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
 
-        <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-          {isCreatorAdmin ? (
-            activity.length > 0 ? (
-              activity.map((act) => (
-                <div key={act.id} className="p-3 rounded-xl bg-white/[0.02] border border-white/5 text-xs">
-                  <div className="flex items-center justify-between font-semibold text-slate-300 mb-1">
-                    <span className="text-amber-300">{act.username}</span>
-                    <span className="text-[11px] font-mono text-amber-400/90 font-medium">
-                      {formatTimeOnly(act.timestamp)}
+            <div className="flex items-center gap-2.5 mb-2">
+              <ShieldCheck className="w-5 h-5 text-emerald-400" />
+              <h3 className="text-base font-bold">Identity-Locked Gmail Drive Bridge</h3>
+            </div>
+            <p className="text-xs text-slate-400 mb-4">
+              For security and data isolation, SmartSorter only permits linking the Google Drive owned by your authenticated login email.
+            </p>
+
+            {summary.subscription_plan === "Free" ? (
+              <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-3">
+                <p className="text-xs text-amber-200 font-semibold">
+                  🔒 Maintenance Subscription Required
+                </p>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  You are currently on the <strong>100 MB Free Quota</strong> ({summary.total_storage_mb} MB used). Activate <strong>Cloud Bridge Pro (₹199/mo)</strong> to bind your personal Google Drive (<code>{currentUser.email}</code>).
+                </p>
+                <button
+                  type="button"
+                  onClick={() => handleActivateSubscription("Cloud Bridge Pro")}
+                  className="w-full py-2.5 rounded-full bg-[#8ab4f8] text-slate-950 text-xs font-bold"
+                >
+                  Activate Cloud Bridge Pro (₹199/mo) →
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleLinkCloudDrive} className="space-y-4">
+                <div>
+                  <label className="text-xs font-semibold text-slate-300">Cloud Provider</label>
+                  <select
+                    value={cloudProviderInput}
+                    onChange={(e) => setCloudProviderInput(e.target.value)}
+                    className="mt-1 w-full rounded-xl bg-[#131314] border border-white/10 px-3 py-2.5 text-xs text-white"
+                  >
+                    <option value="Google Drive">Google Drive (Gmail Bound)</option>
+                    <option value="OneDrive">Microsoft OneDrive (Email Bound)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-slate-300">Authenticated Drive Account</label>
+                    <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
+                      <Lock className="w-3 h-3" /> Identity Locked
                     </span>
                   </div>
-                  <p className="text-slate-400 mb-1">{act.action}</p>
-                  {act.details && <p className="text-[11px] text-slate-500 italic">{act.details}</p>}
+                  <input
+                    type="email"
+                    readOnly
+                    disabled
+                    value={currentUser.email}
+                    className="mt-1 w-full rounded-xl bg-slate-900 border border-emerald-500/30 px-3 py-2.5 text-xs text-emerald-300 font-mono cursor-not-allowed"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Cross-account linking is disabled. Only <strong>{currentUser.email}</strong> can be linked to this workspace.
+                  </p>
                 </div>
-              ))
-            ) : (
-              <p className="text-xs text-slate-500 italic">No system events logged.</p>
-            )
-          ) : (
-            documents.length > 0 ? (
-              documents.slice(0, 10).map((doc) => (
-                <div
-                  key={doc.id}
-                  onClick={() => setPreviewDoc(doc)}
-                  className="p-3 rounded-xl bg-white/[0.02] hover:bg-white/[0.05] border border-white/5 text-xs flex items-center gap-3 cursor-pointer transition"
+
+                <button
+                  type="submit"
+                  className="w-full py-2.5 rounded-full bg-[#8ab4f8] hover:bg-blue-400 text-slate-950 text-xs font-bold transition"
                 >
-                  <div className="p-2 rounded-lg bg-white/5">
-                    {getFileIcon(doc.filename)}
-                  </div>
-                  <div className="overflow-hidden flex-1">
-                    <p className="font-semibold text-slate-200 truncate">{doc.filename}</p>
-                    <p className="text-[10px] text-slate-500">{doc.category} • {doc.size_kb} KB</p>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <p className="text-xs text-slate-500 italic">No files in your account yet.</p>
-            )
-          )}
+                  Verify Identity & Connect My Drive
+                </button>
+              </form>
+            )}
+          </div>
         </div>
-      </aside>
+      )}
 
       {/* MODAL 1: UPLOAD DOCUMENTS */}
       {uploadModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#151d2c] border border-white/10 rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
+          <div className="bg-[#1e1f20] border border-white/10 rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
             <button
               onClick={() => setUploadModalOpen(false)}
               className="absolute right-4 top-4 text-slate-400 hover:text-slate-200"
@@ -1879,18 +2781,18 @@ export default function App() {
               <X className="w-5 h-5" />
             </button>
 
-            <h3 className="text-base font-bold mb-1">Upload Documents</h3>
+            <h3 className="text-base font-bold mb-1">Upload & Sort Files</h3>
             <p className="text-xs text-slate-400 mb-4">
-              Gemini Flash classifies, summarizes, and checks SHA-256 hashes to prevent duplicates.
+              Active Storage: {quotaDisplayLabel}. Duplicate files are automatically routed to Spam.
             </p>
 
             <form onSubmit={handleUploadSubmit}>
-              <div className="border-2 border-dashed border-white/10 hover:border-blue-500/50 rounded-xl p-6 text-center cursor-pointer mb-4">
+              <div className="border-2 border-dashed border-white/10 hover:border-[#8ab4f8] rounded-xl p-6 text-center cursor-pointer mb-4">
                 <input
                   type="file"
                   multiple
                   onChange={(e) => setSelectedFiles(Array.from(e.target.files))}
-                  className="w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
+                  className="w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-[#8ab4f8] file:text-slate-950 cursor-pointer"
                 />
               </div>
 
@@ -1908,34 +2810,25 @@ export default function App() {
               <button
                 type="submit"
                 disabled={isUploading || selectedFiles.length === 0}
-                className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white rounded-xl text-xs font-semibold transition"
+                className="w-full py-2.5 bg-[#8ab4f8] hover:bg-blue-400 disabled:bg-slate-700 text-slate-950 rounded-full text-xs font-bold transition"
               >
-                {isUploading ? "Classifying & Verifying SHA-256..." : `Process ${selectedFiles.length} File(s)`}
+                {isUploading ? "Sorting & Indexing..." : `Sort ${selectedFiles.length} File(s)`}
               </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* MODAL 2: SPLIT-SCREEN DOCUMENT PREVIEW + "ASK GEMINI" + SAVE STUDY NOTES */}
+      {/* MODAL 2: SPLIT-SCREEN DOCUMENT PREVIEW + "ASK GEMINI" */}
       {previewDoc && (
         <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#111827] border border-white/10 rounded-2xl w-full max-w-6xl h-[85vh] flex flex-col shadow-2xl overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-[#151d2c]">
+          <div className="bg-[#1e1f20] border border-white/10 rounded-2xl w-full max-w-6xl h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-[#131314]">
               <div className="flex items-center gap-3 overflow-hidden">
                 {getFileIcon(previewDoc.filename)}
                 <div className="overflow-hidden">
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-bold text-white truncate">{previewDoc.filename}</h3>
-                    {previewDoc.file_hash && (
-                      <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-mono text-emerald-400">
-                        SHA-256 #{previewDoc.file_hash}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-slate-400 truncate">
-                    {previewDoc.summary || `Classified under ${previewDoc.category}`}
-                  </p>
+                  <h3 className="text-sm font-bold text-white truncate">{previewDoc.filename}</h3>
+                  <p className="text-[11px] text-slate-400 truncate">{previewDoc.summary}</p>
                 </div>
               </div>
 
@@ -1943,35 +2836,17 @@ export default function App() {
                 <select
                   value={previewDoc.category}
                   onChange={(e) => handleCategoryChange(previewDoc.id, e.target.value)}
-                  className="bg-slate-900 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-amber-300 font-semibold focus:outline-none"
+                  className="bg-[#1e1f20] border border-white/10 rounded-full px-3 py-1.5 text-xs text-[#8ab4f8] font-semibold"
                 >
                   {allCategoryOptions.map((catOpt) => (
-                    <option key={catOpt} value={catOpt}>
-                      {catOpt}
-                    </option>
+                    <option key={catOpt} value={catOpt}>{catOpt}</option>
                   ))}
-                  <option value="__NEW_CUSTOM__">+ New Custom Folder...</option>
+                  <option value="__NEW_CUSTOM__">+ Custom Folder...</option>
                 </select>
 
                 <button
-                  onClick={(e) => handleShareDocument(previewDoc.id, e)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 rounded-xl text-xs font-semibold border border-purple-500/30 transition"
-                >
-                  <Share2 className="w-3.5 h-3.5" />
-                  <span>Share Link</span>
-                </button>
-
-                <button
-                  onClick={() => window.open(`${API_BASE}/documents/${previewDoc.id}/file?download=false`, "_blank")}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold border border-white/10 transition"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  <span>Open Tab</span>
-                </button>
-
-                <button
                   onClick={() => handleDownloadFile(previewDoc.id)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold transition"
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#8ab4f8] text-slate-950 rounded-full text-xs font-bold"
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span>Download</span>
@@ -1979,7 +2854,7 @@ export default function App() {
 
                 <button
                   onClick={() => setPreviewDoc(null)}
-                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/5"
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -1987,14 +2862,14 @@ export default function App() {
             </div>
 
             <div className="flex-1 flex overflow-hidden">
-              <div className="flex-1 bg-slate-950 flex items-center justify-center overflow-hidden p-4">
+              <div className="flex-1 bg-black flex items-center justify-center overflow-hidden p-4">
                 {["png", "jpg", "jpeg", "webp", "gif", "svg"].includes(
                   previewDoc.filename.split(".").pop().toLowerCase()
                 ) ? (
                   <img
                     src={`${API_BASE}/documents/${previewDoc.id}/file?download=false`}
                     alt={previewDoc.filename}
-                    className="max-h-full max-w-full object-contain rounded-lg shadow-lg"
+                    className="max-h-full max-w-full object-contain rounded-lg"
                   />
                 ) : (
                   <iframe
@@ -2005,16 +2880,16 @@ export default function App() {
                 )}
               </div>
 
-              <div className="w-80 md:w-96 border-l border-white/10 bg-[#131b2e] flex flex-col justify-between p-4 shrink-0">
+              <div className="w-80 md:w-96 border-l border-white/10 bg-[#131314] flex flex-col justify-between p-4 shrink-0">
                 <div className="pb-3 border-b border-white/10">
                   <div className="flex items-center justify-between">
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-blue-400 flex items-center gap-1.5">
-                      <span>✨ Ask Gemini AI</span>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-[#8ab4f8]">
+                      ✨ Ask Gemini AI
                     </h4>
                     <button
                       type="button"
                       onClick={() => handleExportNotesMarkdown(previewDoc.filename, qaMessages)}
-                      className="text-[10px] px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 transition"
+                      className="text-[10px] px-2.5 py-1 rounded-full bg-[#1e1f20] text-slate-300 border border-white/10"
                     >
                       💾 Save Notes (.md)
                     </button>
@@ -2023,23 +2898,16 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => handleAskDocument("Summarize the key points of this document.")}
-                      className="text-[10px] px-2.5 py-1 rounded-lg bg-blue-500/15 hover:bg-blue-500/30 text-blue-300 border border-blue-500/20 transition"
+                      className="text-[10px] px-2.5 py-1 rounded-full bg-blue-500/15 text-blue-300"
                     >
                       📄 Summarize
                     </button>
                     <button
                       type="button"
                       onClick={() => handleAskDocument("Generate 3 study quiz questions from this file.")}
-                      className="text-[10px] px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/30 text-amber-300 border border-amber-500/20 transition"
+                      className="text-[10px] px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-300"
                     >
                       📝 Quiz Me
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleAskDocument("Explain the core concepts and structure of this file.")}
-                      className="text-[10px] px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/20 transition"
-                    >
-                      💡 Explain
                     </button>
                   </div>
                 </div>
@@ -2050,15 +2918,15 @@ export default function App() {
                       key={idx}
                       className={`p-3 rounded-xl text-xs whitespace-pre-wrap leading-relaxed ${
                         m.role === "user"
-                          ? "bg-blue-600 text-white ml-6"
-                          : "bg-slate-900/90 border border-white/10 text-slate-200 mr-2"
+                          ? "bg-[#004a77] text-[#c2e7ff] ml-6"
+                          : "bg-[#1e1f20] border border-white/10 text-slate-200 mr-2"
                       }`}
                     >
                       {m.text}
                     </div>
                   ))}
                   {qaLoading && (
-                    <div className="p-3 rounded-xl bg-slate-900/60 border border-white/5 text-xs text-blue-400 italic animate-pulse">
+                    <div className="text-xs text-[#8ab4f8] italic animate-pulse">
                       Gemini is analyzing document...
                     </div>
                   )}
@@ -2075,13 +2943,13 @@ export default function App() {
                     type="text"
                     value={qaQuestion}
                     onChange={(e) => setQaQuestion(e.target.value)}
-                    placeholder="Ask about this document..."
-                    className="flex-1 rounded-xl bg-slate-900 border border-white/10 px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+                    placeholder="Ask about this file..."
+                    className="flex-1 rounded-full bg-[#1e1f20] border border-white/10 px-3.5 py-2 text-xs text-white focus:outline-none"
                   />
                   <button
                     type="submit"
                     disabled={qaLoading || !qaQuestion.trim()}
-                    className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white rounded-xl text-xs font-semibold transition"
+                    className="px-4 py-2 bg-[#8ab4f8] text-slate-950 rounded-full text-xs font-bold"
                   >
                     Ask
                   </button>
@@ -2092,61 +2960,17 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL 3: "ASK FOLDER AI" MULTI-DOCUMENT SYNTHESIS */}
+      {/* MODAL 3: ASK FOLDER AI SYNTHESIS */}
       {folderAiTarget && (
         <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#131b2e] border border-purple-500/30 rounded-2xl w-full max-w-2xl h-[75vh] flex flex-col shadow-2xl overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-[#151d2c]">
+          <div className="bg-[#1e1f20] border border-purple-500/30 rounded-2xl w-full max-w-2xl h-[75vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-[#131314]">
               <div className="flex items-center gap-2.5">
                 <Sparkles className="w-5 h-5 text-purple-400" />
-                <div>
-                  <h3 className="text-sm font-bold text-white">
-                    Ask Folder AI — "{folderAiTarget}"
-                  </h3>
-                  <p className="text-[11px] text-slate-400">
-                    Multi-document synthesis across all active files in this folder
-                  </p>
-                </div>
+                <h3 className="text-sm font-bold text-white">Ask Folder AI — "{folderAiTarget}"</h3>
               </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleExportNotesMarkdown(`Folder_${folderAiTarget}`, folderAiMessages)}
-                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-white/10 transition"
-                >
-                  💾 Save Notes (.md)
-                </button>
-                <button
-                  onClick={() => setFolderAiTarget(null)}
-                  className="p-1.5 text-slate-400 hover:text-white rounded-lg"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-
-            <div className="px-6 py-2.5 bg-slate-900/60 border-b border-white/5 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => handleAskFolderAi("Create a combined exam revision study guide from all files in this folder.")}
-                className="text-[11px] px-3 py-1 rounded-lg bg-purple-500/15 hover:bg-purple-500/30 text-purple-300 border border-purple-500/20 transition"
-              >
-                📚 Combined Study Guide
-              </button>
-              <button
-                type="button"
-                onClick={() => handleAskFolderAi("Generate 5 comprehensive viva/exam questions covering these documents.")}
-                className="text-[11px] px-3 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/30 text-amber-300 border border-amber-500/20 transition"
-              >
-                🎓 Generate 5 Viva Questions
-              </button>
-              <button
-                type="button"
-                onClick={() => handleAskFolderAi("Compare and summarize the core topics of each file in this folder.")}
-                className="text-[11px] px-3 py-1 rounded-lg bg-blue-500/15 hover:bg-blue-500/30 text-blue-300 border border-blue-500/20 transition"
-              >
-                🔍 Compare All Files
+              <button onClick={() => setFolderAiTarget(null)} className="text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
               </button>
             </div>
 
@@ -2157,17 +2981,12 @@ export default function App() {
                   className={`p-3.5 rounded-xl text-xs whitespace-pre-wrap leading-relaxed ${
                     m.role === "user"
                       ? "bg-purple-600 text-white ml-12"
-                      : "bg-slate-900/90 border border-white/10 text-slate-200 mr-6"
+                      : "bg-[#131314] border border-white/10 text-slate-200 mr-6"
                   }`}
                 >
                   {m.text}
                 </div>
               ))}
-              {folderAiLoading && (
-                <div className="p-3.5 rounded-xl bg-slate-900/60 border border-white/5 text-xs text-purple-300 italic animate-pulse">
-                  Gemini is synthesizing all files in "{folderAiTarget}"...
-                </div>
-              )}
             </div>
 
             <form
@@ -2175,19 +2994,19 @@ export default function App() {
                 e.preventDefault();
                 handleAskFolderAi();
               }}
-              className="p-4 border-t border-white/10 bg-[#151d2c] flex gap-2.5"
+              className="p-4 border-t border-white/10 bg-[#131314] flex gap-2.5"
             >
               <input
                 type="text"
                 value={folderAiQuestion}
                 onChange={(e) => setFolderAiQuestion(e.target.value)}
-                placeholder={`Ask anything across all files in "${folderAiTarget}"...`}
-                className="flex-1 rounded-xl bg-slate-900 border border-white/10 px-4 py-2.5 text-xs text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none"
+                placeholder={`Synthesize all files in "${folderAiTarget}"...`}
+                className="flex-1 rounded-full bg-[#1e1f20] border border-white/10 px-4 py-2 text-xs text-white"
               />
               <button
                 type="submit"
                 disabled={folderAiLoading || !folderAiQuestion.trim()}
-                className="px-4 py-2.5 bg-purple-600 hover:bg-purple-500 disabled:bg-slate-700 text-white rounded-xl text-xs font-semibold transition"
+                className="px-4 py-2 bg-purple-600 text-white rounded-full text-xs font-bold"
               >
                 Synthesize
               </button>

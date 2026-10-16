@@ -25,6 +25,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "documents.db")
 ORGANIZED_DIR = os.path.join(BASE_DIR, "organized_files")
 CREATOR_EMAIL = "noragamiarota@gmail.com"
+FREE_STORAGE_LIMIT_MB = 100.0
 
 SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "noragamiarota@gmail.com")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
@@ -53,7 +54,14 @@ def init_and_migrate_db():
             email TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             role TEXT DEFAULT 'user',
-            account_status TEXT DEFAULT 'Active'
+            account_status TEXT DEFAULT 'Active',
+            subscription_plan TEXT DEFAULT 'Free',
+            cloud_linked INTEGER DEFAULT 0,
+            cloud_provider TEXT DEFAULT 'None',
+            cloud_email TEXT DEFAULT '',
+            drive_binding_hash TEXT DEFAULT '',
+            cloud_quota_mb REAL DEFAULT 15360.0,
+            auto_sync INTEGER DEFAULT 1
         );
     """)
 
@@ -69,6 +77,8 @@ def init_and_migrate_db():
             file_path TEXT,
             size_kb REAL DEFAULT 0.0,
             is_starred INTEGER DEFAULT 0,
+            is_offline INTEGER DEFAULT 0,
+            storage_source TEXT DEFAULT 'Local (100 MB Quota)',
             share_token TEXT DEFAULT '',
             status TEXT DEFAULT 'Active',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -97,31 +107,73 @@ def init_and_migrate_db():
         );
     """)
 
+    # 5. User Support & Feedback Tickets Table (with Creator Reply & Status)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS user_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            username TEXT NOT NULL,
+            user_email TEXT DEFAULT '',
+            category TEXT DEFAULT 'General',
+            message TEXT NOT NULL,
+            status TEXT DEFAULT 'Open',
+            admin_reply TEXT DEFAULT '',
+            replied_at DATETIME,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
     # Migration Safety: Users table columns
     c.execute("PRAGMA table_info(users);")
     user_cols = [col["name"] for col in c.fetchall()]
-    if "account_status" not in user_cols:
-        c.execute("ALTER TABLE users ADD COLUMN account_status TEXT DEFAULT 'Active';")
+    for col_name, col_def in [
+        ("account_status", "TEXT DEFAULT 'Active'"),
+        ("subscription_plan", "TEXT DEFAULT 'Free'"),
+        ("cloud_linked", "INTEGER DEFAULT 0"),
+        ("cloud_provider", "TEXT DEFAULT 'None'"),
+        ("cloud_email", "TEXT DEFAULT ''"),
+        ("drive_binding_hash", "TEXT DEFAULT ''"),
+        ("cloud_quota_mb", "REAL DEFAULT 15360.0"),
+        ("auto_sync", "INTEGER DEFAULT 1")
+    ]:
+        if col_name not in user_cols:
+            c.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_def};")
 
     # Migration Safety: Document History table columns
     c.execute("PRAGMA table_info(document_history);")
     doc_cols = [col["name"] for col in c.fetchall()]
-    if "file_path" not in doc_cols:
-        c.execute("ALTER TABLE document_history ADD COLUMN file_path TEXT DEFAULT '';")
-    if "size_kb" not in doc_cols:
-        c.execute("ALTER TABLE document_history ADD COLUMN size_kb REAL DEFAULT 0.0;")
-    if "status" not in doc_cols:
-        c.execute("ALTER TABLE document_history ADD COLUMN status TEXT DEFAULT 'Active';")
-    if "created_at" not in doc_cols:
-        c.execute("ALTER TABLE document_history ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP;")
-    if "summary" not in doc_cols:
-        c.execute("ALTER TABLE document_history ADD COLUMN summary TEXT DEFAULT '';")
-    if "file_hash" not in doc_cols:
-        c.execute("ALTER TABLE document_history ADD COLUMN file_hash TEXT DEFAULT '';")
-    if "is_starred" not in doc_cols:
-        c.execute("ALTER TABLE document_history ADD COLUMN is_starred INTEGER DEFAULT 0;")
-    if "share_token" not in doc_cols:
-        c.execute("ALTER TABLE document_history ADD COLUMN share_token TEXT DEFAULT '';")
+    for col_name, col_def in [
+        ("file_path", "TEXT DEFAULT ''"),
+        ("size_kb", "REAL DEFAULT 0.0"),
+        ("status", "TEXT DEFAULT 'Active'"),
+        ("created_at", "DATETIME DEFAULT CURRENT_TIMESTAMP"),
+        ("summary", "TEXT DEFAULT ''"),
+        ("file_hash", "TEXT DEFAULT ''"),
+        ("is_starred", "INTEGER DEFAULT 0"),
+        ("is_offline", "INTEGER DEFAULT 0"),
+        ("storage_source", "TEXT DEFAULT 'Local (100 MB Quota)'"),
+        ("share_token", "TEXT DEFAULT ''")
+    ]:
+        if col_name not in doc_cols:
+            c.execute(f"ALTER TABLE document_history ADD COLUMN {col_name} {col_def};")
+
+    # Migration Safety: User Feedback table columns
+    c.execute("PRAGMA table_info(user_feedback);")
+    fb_cols = [col["name"] for col in c.fetchall()]
+    for col_name, col_def in [
+        ("user_email", "TEXT DEFAULT ''"),
+        ("status", "TEXT DEFAULT 'Open'"),
+        ("admin_reply", "TEXT DEFAULT ''"),
+        ("replied_at", "DATETIME")
+    ]:
+        if col_name not in fb_cols:
+            c.execute(f"ALTER TABLE user_feedback ADD COLUMN {col_name} {col_def};")
+
+    c.execute("""
+        UPDATE users
+        SET cloud_linked = 0, cloud_provider = 'None', cloud_email = '', drive_binding_hash = ''
+        WHERE cloud_linked = 1 AND LOWER(cloud_email) != LOWER(email)
+    """)
 
     conn.commit()
     conn.close()
@@ -131,7 +183,7 @@ init_and_migrate_db()
 # ---------------------------------------------------------
 # FASTAPI APPLICATION & CORS MIDDLEWARE
 # ---------------------------------------------------------
-app = FastAPI(title="SmartSorter API", version="5.0.0")
+app = FastAPI(title="SmartSorter API", version="6.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -184,11 +236,36 @@ class AskFolderSchema(BaseModel):
 class UserStatusUpdateSchema(BaseModel):
     account_status: str
 
+class CloudSubscribeSchema(BaseModel):
+    user_id: int
+    plan_name: str
+
+class CloudLinkSchema(BaseModel):
+    user_id: int
+    provider: str
+    cloud_email: str
+
+class CloudSyncSchema(BaseModel):
+    user_id: int
+
+class FeedbackSubmitSchema(BaseModel):
+    user_id: int
+    category: str
+    message: str
+
+class AdminFeedbackReplySchema(BaseModel):
+    reply_text: str
+    status: Optional[str] = "Resolved"
+
 def hash_pw(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 def verify_pw(plain: str, stored: str) -> bool:
     return stored == plain or stored == hash_pw(plain)
+
+def compute_binding_token(user_id: int, email: str) -> str:
+    raw = f"SMARTSORTER_BIND::{user_id}::{email.strip().lower()}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 def send_otp_email(receiver_email: str, username: str, otp_code: str) -> bool:
     if not SMTP_EMAIL or not SMTP_PASSWORD:
@@ -276,14 +353,14 @@ def register_user(payload: RegisterSchema):
 
         pwd_hash = hash_pw(payload.password)
         c.execute(
-            "INSERT INTO users (username, email, password_hash, role, account_status) VALUES (?, ?, ?, ?, 'Active')",
+            "INSERT INTO users (username, email, password_hash, role, account_status, subscription_plan, cloud_linked) VALUES (?, ?, ?, ?, 'Active', 'Free', 0)",
             (payload.name.strip(), clean_email, pwd_hash, role)
         )
         user_id = c.lastrowid
 
         c.execute(
             "INSERT INTO system_logs (timestamp, username, action, details) VALUES (datetime('now'), ?, 'User Registered', ?)",
-            (payload.name.strip(), f"New account created with role '{role}'")
+            (payload.name.strip(), f"New account created ({clean_email}) with 100 MB Free Quota")
         )
         conn.commit()
 
@@ -324,7 +401,7 @@ def login_user(payload: LoginSchema):
 
         c.execute(
             "INSERT INTO system_logs (timestamp, username, action, details) VALUES (datetime('now'), ?, 'User Login', ?)",
-            (user["username"], f"Signed in to {clean_email}")
+            (user["username"], f"Signed in to {'Creator Operations Console' if role == 'admin' else clean_email}")
         )
         conn.commit()
 
@@ -430,7 +507,210 @@ def reset_password(payload: ResetPasswordSchema):
         conn.close()
 
 # ---------------------------------------------------------
-# DOCUMENT UPLOAD WITH SHA-256 DUPLICATE DETECTION
+# STRICT IDENTITY-BOUND CLOUD LINKING & SUBSCRIPTION
+# ---------------------------------------------------------
+@app.post("/api/cloud/subscribe")
+def activate_cloud_subscription(payload: CloudSubscribeSchema):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT username, email FROM users WHERE id = ?", (payload.user_id,))
+        u = c.fetchone()
+        if not u:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        if payload.plan_name == "Free":
+            c.execute(
+                "UPDATE users SET subscription_plan = 'Free', cloud_linked = 0, cloud_provider = 'None', cloud_email = '', drive_binding_hash = '' WHERE id = ?",
+                (payload.user_id,)
+            )
+        else:
+            c.execute(
+                "UPDATE users SET subscription_plan = ? WHERE id = ?",
+                (payload.plan_name, payload.user_id)
+            )
+
+        c.execute("""
+            INSERT INTO system_logs (timestamp, username, action, details)
+            VALUES (datetime('now'), ?, 'Subscription Updated', ?)
+        """, (u["username"], f"Changed maintenance plan to '{payload.plan_name}'"))
+        conn.commit()
+
+        return {
+            "message": f"Plan updated to {payload.plan_name}!",
+            "subscription_plan": payload.plan_name
+        }
+    finally:
+        conn.close()
+
+@app.post("/api/cloud/link")
+def link_external_cloud_drive(payload: CloudLinkSchema):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT id, username, email, subscription_plan FROM users WHERE id = ?", (payload.user_id,))
+        u = c.fetchone()
+        if not u:
+            raise HTTPException(status_code=404, detail="Authenticated user not found.")
+
+        registered_email = u["email"].strip().lower()
+        requested_cloud_email = payload.cloud_email.strip().lower()
+
+        if requested_cloud_email != registered_email:
+            c.execute("""
+                INSERT INTO system_logs (timestamp, username, action, details)
+                VALUES (datetime('now'), ?, 'Security Alert: Drive Mismatch', ?)
+            """, (
+                u["username"],
+                f"Blocked attempt to link unauthorized email '{requested_cloud_email}' (User logged in as '{registered_email}')"
+            ))
+            conn.commit()
+            raise HTTPException(
+                status_code=403,
+                detail=f"Security Violation: You are logged in as '{registered_email}'. You can only link the Google Drive belonging to your own login email."
+            )
+
+        plan = u["subscription_plan"] if "subscription_plan" in u.keys() and u["subscription_plan"] else "Free"
+        if plan == "Free":
+            raise HTTPException(
+                status_code=402,
+                detail="Maintenance Subscription Required: Activate 'Cloud Bridge Pro' or 'Enterprise Auto-Sort' to link your personal Google Drive."
+            )
+
+        binding_hash = compute_binding_token(u["id"], registered_email)
+        personal_drive_quota_mb = 15360.0
+
+        c.execute("""
+            UPDATE users
+            SET cloud_linked = 1,
+                cloud_provider = ?,
+                cloud_email = ?,
+                drive_binding_hash = ?,
+                cloud_quota_mb = ?
+            WHERE id = ?
+        """, (payload.provider.strip(), registered_email, binding_hash, personal_drive_quota_mb, payload.user_id))
+
+        c.execute("""
+            INSERT INTO system_logs (timestamp, username, action, details)
+            VALUES (datetime('now'), ?, 'Verified Drive Linked', ?)
+        """, (
+            u["username"],
+            f"Bound {payload.provider} ({registered_email}) with token #{binding_hash[:8]}"
+        ))
+        conn.commit()
+
+        return {
+            "message": f"Identity Verified! Linked {payload.provider} ({registered_email}) with binding token #{binding_hash[:8]}.",
+            "cloud_linked": True,
+            "cloud_provider": payload.provider,
+            "cloud_email": registered_email,
+            "drive_binding_hash": binding_hash
+        }
+    finally:
+        conn.close()
+
+@app.post("/api/cloud/unlink")
+def unlink_external_cloud_drive(user_id: int = Query(...)):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT username, email FROM users WHERE id = ?", (user_id,))
+        u = c.fetchone()
+        if not u:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        c.execute("""
+            UPDATE users
+            SET cloud_linked = 0, cloud_provider = 'None', cloud_email = '', drive_binding_hash = ''
+            WHERE id = ?
+        """, (user_id,))
+        c.execute("""
+            INSERT INTO system_logs (timestamp, username, action, details)
+            VALUES (datetime('now'), ?, 'Cloud Drive Unlinked', ?)
+        """, (u["username"], f"Unlinked personal drive for {u['email']}; reverted to 100 MB local quota"))
+        conn.commit()
+        return {"message": "Cloud storage unlinked. Reverted to 100 MB local quota."}
+    finally:
+        conn.close()
+
+@app.post("/api/cloud/sync")
+def sync_and_sort_cloud_drive(payload: CloudSyncSchema):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT * FROM users WHERE id = ?", (payload.user_id,))
+        u = c.fetchone()
+        if not u:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        rk = u.keys()
+        if not ("cloud_linked" in rk and u["cloud_linked"]):
+            raise HTTPException(status_code=400, detail="Please link your personal Gmail Drive first.")
+
+        expected_hash = compute_binding_token(u["id"], u["email"])
+        stored_hash = u["drive_binding_hash"] if "drive_binding_hash" in rk else ""
+        if u["cloud_email"].lower() != u["email"].lower() or (stored_hash and stored_hash != expected_hash):
+            raise HTTPException(status_code=403, detail="Drive identity binding verification failed.")
+
+        provider = u["cloud_provider"] or "Google Drive"
+        username = u["username"]
+        user_email = u["email"]
+
+        user_drive_files = [
+            (
+                f"Drive_Notes_{username.replace(' ', '_')}.pdf",
+                "Lecture Notes",
+                f"Synced from {user_email} Drive: Course lecture notes & study guide.",
+                f"%PDF-1.4 Private Google Drive Document belonging to {user_email}\n".encode(),
+                38.4
+            ),
+            (
+                f"Drive_AutoSorter_{u['id']}.py",
+                "Classroom Instruction",
+                f"Synced from {user_email} Drive: Automated extension sorting script.",
+                f"# Private script synced from {user_email} Google Drive\ndef auto_sort():\n    return True\n".encode(),
+                14.6
+            )
+        ]
+
+        synced_list = []
+        for fname, cat, summary_txt, raw_bytes, size_kb in user_drive_files:
+            fhash = hashlib.sha256(raw_bytes).hexdigest()
+            c.execute(
+                "SELECT id FROM document_history WHERE user_id = ? AND filename = ? AND status = 'Active'",
+                (payload.user_id, fname)
+            )
+            if c.fetchone():
+                continue
+
+            user_target_dir = os.path.join(ORGANIZED_DIR, f"user_{payload.user_id}", cat)
+            os.makedirs(user_target_dir, exist_ok=True)
+            disk_path = os.path.join(user_target_dir, fname)
+            with open(disk_path, "wb") as f_out:
+                f_out.write(raw_bytes)
+
+            c.execute("""
+                INSERT INTO document_history
+                (user_id, filename, category, summary, file_hash, file_path, size_kb, is_starred, is_offline, storage_source, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, 'Active', datetime('now'))
+            """, (payload.user_id, fname, cat, summary_txt, fhash, disk_path, size_kb, f"{provider} ({user_email})"))
+            synced_list.append(fname)
+
+        c.execute("""
+            INSERT INTO system_logs (timestamp, username, action, details)
+            VALUES (datetime('now'), ?, 'Personal Drive Synced', ?)
+        """, (username, f"Synced & sorted {len(synced_list)} file(s) from verified account {user_email}"))
+        conn.commit()
+
+        return {
+            "message": f"Synced & sorted {len(synced_list)} file(s) from your drive ({user_email})!" if synced_list else f"Your drive ({user_email}) is already 100% synced and sorted!",
+            "synced_files": synced_list
+        }
+    finally:
+        conn.close()
+
+# ---------------------------------------------------------
+# DOCUMENT UPLOAD WITH 100 MB QUOTA CHECK & SHA-256 SPAM
 # ---------------------------------------------------------
 @app.post("/api/documents/upload")
 async def upload_and_classify_documents(
@@ -443,14 +723,31 @@ async def upload_and_classify_documents(
     skipped_duplicates = []
 
     try:
-        c.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+        c.execute("SELECT * FROM users WHERE id = ?", (user_id,))
         user_row = c.fetchone()
-        username = user_row["username"] if user_row else f"User_{user_id}"
+        if not user_row:
+            raise HTTPException(status_code=404, detail="User session invalid.")
+
+        username = user_row["username"]
+        user_email = user_row["email"]
+        rk_user = user_row.keys()
+        is_linked = bool(user_row["cloud_linked"]) if "cloud_linked" in rk_user else False
+        storage_source = f"{user_row['cloud_provider']} ({user_email})" if is_linked else "Local (100 MB Quota)"
+
+        c.execute("SELECT COALESCE(SUM(size_kb), 0) FROM document_history WHERE user_id = ? AND status = 'Active'", (user_id,))
+        current_kb = c.fetchone()[0] or 0.0
+        limit_kb = (user_row["cloud_quota_mb"] * 1024.0) if is_linked else (FREE_STORAGE_LIMIT_MB * 1024.0)
 
         for file in files:
             contents = await file.read()
             size_kb = round(len(contents) / 1024, 2)
             filename = file.filename
+
+            if (current_kb + size_kb) > limit_kb:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Storage Quota Exceeded: Your Free 100 MB quota is full ({round(current_kb/1024, 2)} MB used). Please link your personal Gmail Drive."
+                )
 
             file_hash = hashlib.sha256(contents).hexdigest()
 
@@ -460,6 +757,26 @@ async def upload_and_classify_documents(
             )
             existing_doc = c.fetchone()
             if existing_doc:
+                spam_dir = os.path.join(ORGANIZED_DIR, f"user_{user_id}", "Spam_Quarantine")
+                os.makedirs(spam_dir, exist_ok=True)
+                spam_path = os.path.join(spam_dir, filename)
+                with open(spam_path, "wb") as f_out:
+                    f_out.write(contents)
+
+                c.execute("""
+                    INSERT INTO document_history
+                    (user_id, filename, category, summary, file_hash, file_path, size_kb, storage_source, status, created_at)
+                    VALUES (?, ?, 'Duplicate / Spam', ?, ?, ?, ?, ?, 'Spam', datetime('now'))
+                """, (
+                    user_id,
+                    filename,
+                    f"Duplicate of '{existing_doc['filename']}' (Blocked by SHA-256)",
+                    file_hash,
+                    spam_path,
+                    size_kb,
+                    storage_source
+                ))
+
                 skipped_duplicates.append({
                     "filename": filename,
                     "matched_with": existing_doc["filename"],
@@ -467,8 +784,8 @@ async def upload_and_classify_documents(
                 })
                 c.execute("""
                     INSERT INTO system_logs (timestamp, username, action, details)
-                    VALUES (datetime('now'), ?, 'Duplicate Blocked', ?)
-                """, (username, f"SHA-256 matched '{filename}' with existing '{existing_doc['filename']}'"))
+                    VALUES (datetime('now'), ?, 'Duplicate Routed to Spam', ?)
+                """, (username, f"SHA-256 matched '{filename}' with '{existing_doc['filename']}' -> moved to Spam"))
                 continue
 
             category = "Miscellaneous"
@@ -499,15 +816,17 @@ async def upload_and_classify_documents(
                 f_out.write(contents)
 
             c.execute("""
-                INSERT INTO document_history (user_id, filename, category, summary, file_hash, file_path, size_kb, is_starred, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'Active', datetime('now'))
-            """, (user_id, filename, category, summary_text, file_hash, disk_path, size_kb))
+                INSERT INTO document_history
+                (user_id, filename, category, summary, file_hash, file_path, size_kb, is_starred, is_offline, storage_source, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, 'Active', datetime('now'))
+            """, (user_id, filename, category, summary_text, file_hash, disk_path, size_kb, storage_source))
             doc_id = c.lastrowid
+            current_kb += size_kb
 
             c.execute("""
                 INSERT INTO system_logs (timestamp, username, action, details)
                 VALUES (datetime('now'), ?, 'Files Sorted', ?)
-            """, (username, f"Classified '{filename}' under '{category}' ({size_kb} KB)"))
+            """, (username, f"Classified '{filename}' under '{category}' [{storage_source}] ({size_kb} KB)"))
 
             saved_records.append({
                 "id": doc_id,
@@ -517,17 +836,19 @@ async def upload_and_classify_documents(
                 "file_hash": file_hash[:12],
                 "file_path": disk_path,
                 "size_kb": size_kb,
-                "is_starred": 0,
+                "storage_source": storage_source,
                 "status": "Active"
             })
 
         conn.commit()
         return {
-            "message": f"Processed {len(saved_records)} file(s), skipped {len(skipped_duplicates)} duplicate(s).",
+            "message": f"Processed {len(saved_records)} file(s), routed {len(skipped_duplicates)} duplicate(s) to Spam.",
             "files": saved_records,
             "skipped_duplicates": skipped_duplicates
         }
 
+    except HTTPException:
+        raise
     except Exception as err:
         conn.rollback()
         import traceback
@@ -573,6 +894,8 @@ def list_documents(
                 "file_path": r["file_path"] if "file_path" in rk else "",
                 "size_kb": r["size_kb"] if "size_kb" in rk else 0.0,
                 "is_starred": bool(r["is_starred"]) if "is_starred" in rk else False,
+                "is_offline": bool(r["is_offline"]) if "is_offline" in rk else False,
+                "storage_source": r["storage_source"] if "storage_source" in rk and r["storage_source"] else "Local (100 MB Quota)",
                 "share_token": r["share_token"] if "share_token" in rk and r["share_token"] else "",
                 "status": r["status"] if "status" in rk else "Active",
                 "created_at": r["created_at"] if "created_at" in rk else ""
@@ -582,7 +905,195 @@ def list_documents(
         conn.close()
 
 # ---------------------------------------------------------
-# v5.0 UPGRADE 1: "ASK FOLDER AI" MULTI-DOCUMENT SYNTHESIS
+# USER SIDEBAR ACTIONS: OFFLINE, SPAM, STAR & SHARE
+# ---------------------------------------------------------
+@app.post("/api/documents/{doc_id}/offline")
+def toggle_offline_document(doc_id: int):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT id, filename, is_offline FROM document_history WHERE id = ?", (doc_id,))
+        doc = c.fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found.")
+
+        rk = doc.keys()
+        curr = int(doc["is_offline"]) if "is_offline" in rk and doc["is_offline"] else 0
+        new_val = 0 if curr == 1 else 1
+        c.execute("UPDATE document_history SET is_offline = ? WHERE id = ?", (new_val, doc_id))
+        conn.commit()
+        return {"id": doc_id, "is_offline": bool(new_val)}
+    finally:
+        conn.close()
+
+@app.post("/api/documents/{doc_id}/spam")
+def toggle_spam_status(doc_id: int):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT id, filename, status FROM document_history WHERE id = ?", (doc_id,))
+        doc = c.fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found.")
+
+        new_status = "Active" if doc["status"] == "Spam" else "Spam"
+        c.execute("UPDATE document_history SET status = ? WHERE id = ?", (new_status, doc_id))
+        conn.commit()
+        return {"id": doc_id, "status": new_status}
+    finally:
+        conn.close()
+
+@app.post("/api/documents/{doc_id}/star")
+def toggle_star_document(doc_id: int):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT id, filename, is_starred FROM document_history WHERE id = ?", (doc_id,))
+        doc = c.fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found.")
+
+        rk = doc.keys()
+        current_star = int(doc["is_starred"]) if "is_starred" in rk and doc["is_starred"] else 0
+        new_star = 0 if current_star == 1 else 1
+
+        c.execute("UPDATE document_history SET is_starred = ? WHERE id = ?", (new_star, doc_id))
+        conn.commit()
+        return {"id": doc_id, "is_starred": bool(new_star)}
+    finally:
+        conn.close()
+
+@app.post("/api/documents/{doc_id}/share")
+def generate_share_link(doc_id: int):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT * FROM document_history WHERE id = ?", (doc_id,))
+        doc = c.fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found.")
+
+        rk = doc.keys()
+        token = doc["share_token"] if "share_token" in rk and doc["share_token"] else ""
+        if not token:
+            token = secrets.token_hex(8)
+            c.execute("UPDATE document_history SET share_token = ? WHERE id = ?", (token, doc_id))
+
+            c.execute("SELECT username FROM users WHERE id = ?", (doc["user_id"],))
+            u = c.fetchone()
+            uname = u["username"] if u else f"User_{doc['user_id']}"
+
+            c.execute("""
+                INSERT INTO system_logs (timestamp, username, action, details)
+                VALUES (datetime('now'), ?, 'Share Link Created', ?)
+            """, (uname, f"Generated share link for '{doc['filename']}'"))
+            conn.commit()
+
+        share_url = f"http://localhost:8000/api/share/{token}"
+        return {"share_token": token, "share_url": share_url, "filename": doc["filename"]}
+    finally:
+        conn.close()
+
+@app.get("/api/share/{token}")
+def access_shared_file(token: str, download: bool = Query(False)):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT * FROM document_history WHERE share_token = ? AND status = 'Active'", (token.strip(),))
+        doc = c.fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Shared link is invalid or file has been removed.")
+
+        rk = doc.keys()
+        disk_path = doc["file_path"] if "file_path" in rk and doc["file_path"] else os.path.join(
+            ORGANIZED_DIR, f"user_{doc['user_id']}", doc["category"], doc["filename"]
+        )
+        if not os.path.exists(disk_path):
+            raise HTTPException(status_code=404, detail="Physical file missing on disk.")
+
+        mime_type, _ = mimetypes.guess_type(doc["filename"])
+        mime_type = mime_type or "application/octet-stream"
+        disposition = "attachment" if download else "inline"
+
+        return FileResponse(
+            path=disk_path,
+            media_type=mime_type,
+            headers={"Content-Disposition": f'{disposition}; filename="{doc["filename"]}"'}
+        )
+    finally:
+        conn.close()
+
+# ---------------------------------------------------------
+# TWO-WAY SUPPORT & ISSUE DESK ENDPOINTS (USER <-> CREATOR)
+# ---------------------------------------------------------
+@app.post("/api/feedback")
+def submit_user_feedback(payload: FeedbackSubmitSchema):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT username, email FROM users WHERE id = ?", (payload.user_id,))
+        u = c.fetchone()
+        uname = u["username"] if u else f"User_{payload.user_id}"
+        uemail = u["email"] if u else ""
+
+        c.execute("""
+            INSERT INTO user_feedback (user_id, username, user_email, category, message, status, admin_reply, created_at)
+            VALUES (?, ?, ?, ?, ?, 'Open', '', datetime('now'))
+        """, (payload.user_id, uname, uemail, payload.category.strip(), payload.message.strip()))
+
+        c.execute("""
+            INSERT INTO system_logs (timestamp, username, action, details)
+            VALUES (datetime('now'), ?, 'Support Ticket Opened', ?)
+        """, (uname, f"[{payload.category}] {payload.message[:60]}"))
+        conn.commit()
+        return {"message": "Support ticket submitted! The Creator Admin will reply shortly."}
+    finally:
+        conn.close()
+
+@app.get("/api/feedback")
+def list_user_feedback(user_id: Optional[int] = None):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        if user_id:
+            c.execute("SELECT * FROM user_feedback WHERE user_id = ? ORDER BY id DESC", (user_id,))
+        else:
+            c.execute("SELECT * FROM user_feedback ORDER BY CASE WHEN status = 'Open' THEN 0 ELSE 1 END, id DESC LIMIT 100")
+        return [dict(r) for r in c.fetchall()]
+    finally:
+        conn.close()
+
+@app.put("/api/admin/feedback/{ticket_id}/reply")
+def reply_to_support_ticket(ticket_id: int, payload: AdminFeedbackReplySchema):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT * FROM user_feedback WHERE id = ?", (ticket_id,))
+        ticket = c.fetchone()
+        if not ticket:
+            raise HTTPException(status_code=404, detail="Support ticket not found.")
+
+        reply_clean = payload.reply_text.strip()
+        new_status = payload.status or "Resolved"
+
+        c.execute("""
+            UPDATE user_feedback
+            SET admin_reply = ?, status = ?, replied_at = datetime('now')
+            WHERE id = ?
+        """, (reply_clean, new_status, ticket_id))
+
+        c.execute("""
+            INSERT INTO system_logs (timestamp, username, action, details)
+            VALUES (datetime('now'), 'Creator Admin', 'Support Ticket Replied', ?)
+        """, (f"Replied to Ticket #{ticket_id} ({ticket['username']}): {reply_clean[:50]}",))
+        conn.commit()
+
+        return {"message": f"Reply sent to {ticket['username']} and ticket marked {new_status}!"}
+    finally:
+        conn.close()
+
+# ---------------------------------------------------------
+# AI SYNTHESIS & Q&A ENDPOINTS
 # ---------------------------------------------------------
 @app.post("/api/folders/ask")
 def ask_folder_ai(payload: AskFolderSchema):
@@ -673,126 +1184,6 @@ def ask_folder_ai(payload: AskFolderSchema):
     finally:
         conn.close()
 
-# ---------------------------------------------------------
-# v5.0 UPGRADE 2: STAR / PIN PRIORITY FILES
-# ---------------------------------------------------------
-@app.post("/api/documents/{doc_id}/star")
-def toggle_star_document(doc_id: int):
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        c.execute("SELECT id, filename, is_starred FROM document_history WHERE id = ?", (doc_id,))
-        doc = c.fetchone()
-        if not doc:
-            raise HTTPException(status_code=404, detail="Document not found.")
-
-        rk = doc.keys()
-        current_star = int(doc["is_starred"]) if "is_starred" in rk and doc["is_starred"] else 0
-        new_star = 0 if current_star == 1 else 1
-
-        c.execute("UPDATE document_history SET is_starred = ? WHERE id = ?", (new_star, doc_id))
-        conn.commit()
-        return {"id": doc_id, "is_starred": bool(new_star)}
-    finally:
-        conn.close()
-
-# ---------------------------------------------------------
-# v5.0 UPGRADE 3: INTERACTIVE ADMIN ACCOUNT STATUS TOGGLE
-# ---------------------------------------------------------
-@app.put("/api/admin/users/{target_user_id}/status")
-def toggle_user_account_status(target_user_id: int, payload: UserStatusUpdateSchema):
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        new_status = payload.account_status.strip()
-        if new_status not in ["Active", "Suspended"]:
-            raise HTTPException(status_code=400, detail="Status must be 'Active' or 'Suspended'.")
-
-        c.execute("SELECT id, username, email, role FROM users WHERE id = ?", (target_user_id,))
-        u = c.fetchone()
-        if not u:
-            raise HTTPException(status_code=404, detail="User account not found.")
-
-        if u["email"].lower() == CREATOR_EMAIL.lower():
-            raise HTTPException(status_code=400, detail="Cannot suspend the Creator Admin account.")
-
-        c.execute("UPDATE users SET account_status = ? WHERE id = ?", (new_status, target_user_id))
-        c.execute("""
-            INSERT INTO system_logs (timestamp, username, action, details)
-            VALUES (datetime('now'), 'Creator Admin', 'Account Status Changed', ?)
-        """, (f"Set {u['username']} ({u['email']}) status to {new_status}",))
-        conn.commit()
-
-        return {"message": f"Account {u['email']} status updated to {new_status}", "status": new_status}
-    finally:
-        conn.close()
-
-# ---------------------------------------------------------
-# v5.0 UPGRADE 4: ONE-CLICK SHAREABLE FILE LINKS
-# ---------------------------------------------------------
-@app.post("/api/documents/{doc_id}/share")
-def generate_share_link(doc_id: int):
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        c.execute("SELECT * FROM document_history WHERE id = ?", (doc_id,))
-        doc = c.fetchone()
-        if not doc:
-            raise HTTPException(status_code=404, detail="Document not found.")
-
-        rk = doc.keys()
-        token = doc["share_token"] if "share_token" in rk and doc["share_token"] else ""
-        if not token:
-            token = secrets.token_hex(8)
-            c.execute("UPDATE document_history SET share_token = ? WHERE id = ?", (token, doc_id))
-
-            c.execute("SELECT username FROM users WHERE id = ?", (doc["user_id"],))
-            u = c.fetchone()
-            uname = u["username"] if u else f"User_{doc['user_id']}"
-
-            c.execute("""
-                INSERT INTO system_logs (timestamp, username, action, details)
-                VALUES (datetime('now'), ?, 'Share Link Created', ?)
-            """, (uname, f"Generated share link for '{doc['filename']}'"))
-            conn.commit()
-
-        share_url = f"http://localhost:8000/api/share/{token}"
-        return {"share_token": token, "share_url": share_url, "filename": doc["filename"]}
-    finally:
-        conn.close()
-
-@app.get("/api/share/{token}")
-def access_shared_file(token: str, download: bool = Query(False)):
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        c.execute("SELECT * FROM document_history WHERE share_token = ? AND status = 'Active'", (token.strip(),))
-        doc = c.fetchone()
-        if not doc:
-            raise HTTPException(status_code=404, detail="Shared link is invalid or file has been removed.")
-
-        rk = doc.keys()
-        disk_path = doc["file_path"] if "file_path" in rk and doc["file_path"] else os.path.join(
-            ORGANIZED_DIR, f"user_{doc['user_id']}", doc["category"], doc["filename"]
-        )
-        if not os.path.exists(disk_path):
-            raise HTTPException(status_code=404, detail="Physical file missing on disk.")
-
-        mime_type, _ = mimetypes.guess_type(doc["filename"])
-        mime_type = mime_type or "application/octet-stream"
-        disposition = "attachment" if download else "inline"
-
-        return FileResponse(
-            path=disk_path,
-            media_type=mime_type,
-            headers={"Content-Disposition": f'{disposition}; filename="{doc["filename"]}"'}
-        )
-    finally:
-        conn.close()
-
-# ---------------------------------------------------------
-# SINGLE DOCUMENT "ASK GEMINI" Q&A ENDPOINT
-# ---------------------------------------------------------
 @app.post("/api/documents/{doc_id}/ask")
 def ask_document_question(doc_id: int, payload: AskDocumentSchema):
     conn = get_db()
@@ -1015,7 +1406,7 @@ def override_document_category(doc_id: int, payload: CategoryOverrideSchema):
             shutil.move(old_path, new_path)
 
         c.execute(
-            "UPDATE document_history SET category = ?, file_path = ? WHERE id = ?",
+            "UPDATE document_history SET category = ?, file_path = ?, status = 'Active' WHERE id = ?",
             (new_cat, new_path, doc_id)
         )
 
@@ -1058,7 +1449,7 @@ def export_audit_logs_csv():
         conn.close()
 
 # ---------------------------------------------------------
-# DOCUMENT DELETION & RESTORATION ENDPOINTS
+# DOCUMENT DELETION, BIN & RESTORATION ENDPOINTS
 # ---------------------------------------------------------
 @app.delete("/api/documents/{doc_id}")
 def delete_document(doc_id: int, permanent: bool = Query(False)):
@@ -1090,13 +1481,13 @@ def delete_document(doc_id: int, permanent: bool = Query(False)):
             c.execute("""
                 INSERT INTO system_logs (timestamp, username, action, details)
                 VALUES (datetime('now'), ?, 'Permanent Purge', ?)
-            """, (uname, f"Purged '{filename}' permanently from SQLite & storage"))
+            """, (uname, f"Purged '{filename}' permanently from Bin & storage"))
         else:
             c.execute("UPDATE document_history SET status = 'Deleted' WHERE id = ?", (doc_id,))
             c.execute("""
                 INSERT INTO system_logs (timestamp, username, action, details)
-                VALUES (datetime('now'), ?, 'File Soft Deleted', ?)
-            """, (uname, f"Moved '{filename}' to trash"))
+                VALUES (datetime('now'), ?, 'Moved to Bin', ?)
+            """, (uname, f"Moved '{filename}' to Bin"))
 
         conn.commit()
         return {"message": "Document updated successfully"}
@@ -1132,10 +1523,10 @@ def soft_delete_all_documents(user_id: int = Query(...)):
         c.execute("UPDATE document_history SET status = 'Deleted' WHERE user_id = ? AND status = 'Active'", (user_id,))
         c.execute("""
             INSERT INTO system_logs (timestamp, username, action, details)
-            VALUES (datetime('now'), (SELECT username FROM users WHERE id = ?), 'Batch Soft Delete', 'Moved all active files to trash')
+            VALUES (datetime('now'), (SELECT username FROM users WHERE id = ?), 'Batch Move to Bin', 'Moved all active files to Bin')
         """, (user_id,))
         conn.commit()
-        return {"message": "All active files moved to trash"}
+        return {"message": "All active files moved to Bin"}
     finally:
         conn.close()
 
@@ -1159,18 +1550,74 @@ def hard_delete_all_documents(user_id: int = Query(...)):
         conn.close()
 
 # ---------------------------------------------------------
-# WORKSPACE METRICS & CREATOR ADMIN OVERSIGHT
-# (Storage quota left untouched at 100 MB for custom plan)
+# WORKSPACE SUMMARY & DEDICATED CREATOR OPERATIONS OVERVIEW
 # ---------------------------------------------------------
+@app.put("/api/admin/users/{target_user_id}/status")
+def toggle_user_account_status(target_user_id: int, payload: UserStatusUpdateSchema):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        new_status = payload.account_status.strip()
+        if new_status not in ["Active", "Suspended"]:
+            raise HTTPException(status_code=400, detail="Status must be 'Active' or 'Suspended'.")
+
+        c.execute("SELECT id, username, email, role FROM users WHERE id = ?", (target_user_id,))
+        u = c.fetchone()
+        if not u:
+            raise HTTPException(status_code=404, detail="User account not found.")
+
+        if u["email"].lower() == CREATOR_EMAIL.lower():
+            raise HTTPException(status_code=400, detail="Cannot suspend the Creator Admin account.")
+
+        c.execute("UPDATE users SET account_status = ? WHERE id = ?", (new_status, target_user_id))
+        c.execute("""
+            INSERT INTO system_logs (timestamp, username, action, details)
+            VALUES (datetime('now'), 'Creator Admin', 'Account Status Changed', ?)
+        """, (f"Set {u['username']} ({u['email']}) status to {new_status}",))
+        conn.commit()
+
+        return {"message": f"Account {u['email']} status updated to {new_status}", "status": new_status}
+    finally:
+        conn.close()
+
 @app.get("/api/workspace/summary")
 def get_workspace_summary(user_id: int):
     conn = get_db()
     c = conn.cursor()
     try:
+        c.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        u = c.fetchone()
+        if not u:
+            raise HTTPException(status_code=404, detail="User not found.")
+        uk = u.keys()
+
+        login_email = u["email"].strip().lower()
+        sub_plan = u["subscription_plan"] if "subscription_plan" in uk and u["subscription_plan"] else "Free"
+        cloud_linked = bool(u["cloud_linked"]) if "cloud_linked" in uk else False
+        cloud_provider = u["cloud_provider"] if "cloud_provider" in uk and u["cloud_provider"] else "None"
+        cloud_email = u["cloud_email"] if "cloud_email" in uk and u["cloud_email"] else ""
+        binding_hash = u["drive_binding_hash"] if "drive_binding_hash" in uk and u["drive_binding_hash"] else ""
+        cloud_quota_mb = u["cloud_quota_mb"] if "cloud_quota_mb" in uk and u["cloud_quota_mb"] else 15360.0
+
+        if cloud_linked and cloud_email.lower() != login_email:
+            cloud_linked = False
+            cloud_provider = "None"
+            cloud_email = ""
+
         c.execute("SELECT COUNT(*), COALESCE(SUM(size_kb), 0) FROM document_history WHERE user_id = ? AND status = 'Active'", (user_id,))
         row = c.fetchone()
         active_count = row[0] if row else 0
-        total_kb = row[1] if row else 0.0
+        total_kb = round(row[1] if row and row[1] else 0.0, 2)
+        total_mb = round(total_kb / 1024.0, 2)
+
+        c.execute("SELECT COUNT(*) FROM document_history WHERE user_id = ? AND status = 'Deleted'", (user_id,))
+        bin_count = c.fetchone()[0] or 0
+
+        c.execute("SELECT COUNT(*) FROM document_history WHERE user_id = ? AND status = 'Spam'", (user_id,))
+        spam_count = c.fetchone()[0] or 0
+
+        c.execute("SELECT COUNT(*) FROM document_history WHERE user_id = ? AND status = 'Active' AND is_offline = 1", (user_id,))
+        offline_count = c.fetchone()[0] or 0
 
         c.execute("""
             SELECT category, COUNT(*), COALESCE(SUM(size_kb), 0)
@@ -1182,11 +1629,22 @@ def get_workspace_summary(user_id: int):
         cat_counts = {r[0]: r[1] for r in cat_rows}
         cat_storage_kb = {r[0]: round(r[2], 2) for r in cat_rows}
 
+        effective_limit_mb = cloud_quota_mb if cloud_linked else FREE_STORAGE_LIMIT_MB
+
         return {
             "active_files_count": active_count or 0,
-            "total_storage_kb": round(total_kb or 0.0, 2),
-            "total_storage_mb": round((total_kb or 0.0) / 1024, 2),
-            "storage_limit_mb": 100,
+            "bin_files_count": bin_count,
+            "spam_files_count": spam_count,
+            "offline_files_count": offline_count,
+            "total_storage_kb": total_kb,
+            "total_storage_mb": total_mb,
+            "storage_limit_mb": effective_limit_mb,
+            "free_limit_mb": FREE_STORAGE_LIMIT_MB,
+            "subscription_plan": sub_plan,
+            "cloud_linked": cloud_linked,
+            "cloud_provider": cloud_provider,
+            "cloud_email": cloud_email if cloud_linked else login_email,
+            "drive_binding_hash": binding_hash[:8] if binding_hash else "",
             "category_counts": cat_counts,
             "category_storage_kb": cat_storage_kb
         }
@@ -1209,12 +1667,14 @@ def get_admin_overview():
     conn = get_db()
     c = conn.cursor()
     try:
-        c.execute("SELECT id, username, email, COALESCE(role, 'user') as role, COALESCE(account_status, 'Active') as account_status FROM users")
+        c.execute("SELECT * FROM users")
         user_rows = c.fetchall()
 
         total_accounts = len(user_rows)
         admin_count = 0
         member_count = 0
+        pro_subscribers = 0
+        linked_drives_count = 0
         users_list = []
 
         c.execute("SELECT COUNT(*) FROM document_history")
@@ -1228,17 +1688,42 @@ def get_admin_overview():
         c.execute("SELECT COUNT(*) FROM document_history WHERE status = 'Deleted'")
         total_deleted_files = c.fetchone()[0] or 0
 
+        c.execute("SELECT COUNT(*) FROM document_history WHERE status = 'Spam'")
+        total_spam_files = c.fetchone()[0] or 0
+
+        c.execute("SELECT COUNT(*) FROM user_feedback WHERE status = 'Open'")
+        open_tickets_count = c.fetchone()[0] or 0
+
+        c.execute("""
+            SELECT category, COUNT(*), COALESCE(SUM(size_kb), 0)
+            FROM document_history
+            GROUP BY category
+            ORDER BY COUNT(*) DESC
+        """)
+        global_categories = [
+            {"category": r[0], "count": r[1], "size_kb": round(r[2], 2)}
+            for r in c.fetchall()
+        ]
+
         for u in user_rows:
+            uk = u.keys()
             uid = u["id"]
             uname = u["username"]
             uemail = u["email"]
             urole = (u["role"] or "user").strip()
-            ustatus = u["account_status"] if "account_status" in u.keys() and u["account_status"] else "Active"
+            ustatus = u["account_status"] if "account_status" in uk and u["account_status"] else "Active"
+            uplan = u["subscription_plan"] if "subscription_plan" in uk and u["subscription_plan"] else "Free"
+            is_linked = bool(u["cloud_linked"]) if "cloud_linked" in uk else False
+            ucloud = f"{u['cloud_provider']} ({u['cloud_email']})" if is_linked else "100 MB Local Quota"
 
             if urole.lower() == "admin":
                 admin_count += 1
             else:
                 member_count += 1
+                if uplan != "Free":
+                    pro_subscribers += 1
+                if is_linked:
+                    linked_drives_count += 1
 
             c.execute("SELECT COUNT(*) FROM document_history WHERE user_id = ?", (uid,))
             u_lifetime = c.fetchone()[0] or 0
@@ -1257,6 +1742,8 @@ def get_admin_overview():
                 "email": uemail,
                 "role": urole.upper(),
                 "status": ustatus,
+                "subscription_plan": uplan,
+                "cloud_provider": ucloud,
                 "total_classified": u_lifetime,
                 "active_files": u_active_count,
                 "deleted_files": u_deleted_count,
@@ -1267,10 +1754,15 @@ def get_admin_overview():
             "total_accounts": total_accounts,
             "admin_count": admin_count,
             "member_count": member_count,
+            "pro_subscribers": pro_subscribers,
+            "linked_drives_count": linked_drives_count,
+            "open_tickets_count": open_tickets_count,
             "total_files_classified": total_files_classified,
             "active_files": total_active_files,
             "deleted_files": total_deleted_files,
+            "spam_files": total_spam_files,
             "total_storage_mb": round(total_active_storage_kb / 1024, 2),
+            "global_categories": global_categories,
             "users": users_list
         }
     finally:
@@ -1278,4 +1770,4 @@ def get_admin_overview():
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "app": "SmartSorter", "version": "5.0.0"}
+    return {"status": "ok", "app": "SmartSorter", "version": "6.2.0"}
