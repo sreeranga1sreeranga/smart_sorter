@@ -2,11 +2,18 @@ import React, { useState, useEffect, useRef } from "react";
 import axios from "axios";
 import "./index.css";
 import {
-  Interactive3DBackground,
+  ThreeGraffitiScene,
+  SplashCursor,
+  DecryptedText,
+  TypewriterWords,
+  GraffitiTicker,
   TiltSpotlightCard,
   MagneticButton,
+  FloatingGraffitiDock,
   useLenisSmoothScroll,
-  useGsap3DCascade
+  useGsap3DCascade,
+  motion,
+  AnimatePresence
 } from "./components/NeoGlass3D";
 import {
   Folder,
@@ -41,7 +48,8 @@ import {
   AlertOctagon,
   Settings,
   HelpCircle,
-  Cloud
+  Cloud,
+  Zap
 } from "lucide-react";
 
 const API_BASE = "http://localhost:8000/api";
@@ -57,12 +65,12 @@ const STANDARD_CATEGORIES = [
   "Miscellaneous"
 ];
 
-const FOLDER_ACCENTS = [
-  { icon: "text-violet-600", badge: "bg-violet-100 text-violet-700 border-violet-200", glow: "rgba(124, 58, 237, 0.16)" },
-  { icon: "text-pink-600", badge: "bg-pink-100 text-pink-700 border-pink-200", glow: "rgba(236, 72, 153, 0.16)" },
-  { icon: "text-emerald-600", badge: "bg-emerald-100 text-emerald-700 border-emerald-200", glow: "rgba(16, 185, 129, 0.16)" },
-  { icon: "text-orange-600", badge: "bg-orange-100 text-orange-700 border-orange-200", glow: "rgba(249, 115, 22, 0.16)" },
-  { icon: "text-cyan-600", badge: "bg-cyan-100 text-cyan-700 border-cyan-200", glow: "rgba(6, 182, 212, 0.16)" }
+const GRAFFITI_SWATCHES = [
+  { bg: "bg-[#CCFF00]", text: "text-black", variant: "lime", tag: "border-[#CCFF00] text-[#CCFF00]" },
+  { bg: "bg-[#FF007F]", text: "text-white", variant: "pink", tag: "border-[#FF007F] text-[#FF007F]" },
+  { bg: "bg-[#00F0FF]", text: "text-black", variant: "cyan", tag: "border-[#00F0FF] text-[#00F0FF]" },
+  { bg: "bg-[#FFBE0B]", text: "text-black", variant: "lime", tag: "border-[#FFBE0B] text-[#FFBE0B]" },
+  { bg: "bg-[#8338EC]", text: "text-white", variant: "pink", tag: "border-[#8338EC] text-[#c792ea]" }
 ];
 
 const formatTimestamp = (raw) => {
@@ -111,7 +119,7 @@ export default function App() {
   const [resetStep, setResetStep] = useState(1);
   const [otpTimer, setOtpTimer] = useState(0);
 
-  // Navigation Tabs
+  // Navigation Dock Tabs (No Traditional Left Sidebar!)
   const [activeTab, setActiveTab] = useState("library");
   const [creatorTab, setCreatorTab] = useState("telemetry");
   const [ticketFilter, setTicketFilter] = useState("All");
@@ -218,7 +226,7 @@ export default function App() {
       setQaMessages([
         {
           role: "ai",
-          text: `Hi! I'm ready to analyze "${previewDoc.filename}" (${previewDoc.category}). Ask a question below or pick a quick prompt!`
+          text: `⚡ Yo! Ready to break down "${previewDoc.filename}" (${previewDoc.category}). Hit a quick tag or ask me anything!`
         }
       ]);
       setQaQuestion("");
@@ -230,7 +238,7 @@ export default function App() {
       setFolderAiMessages([
         {
           role: "ai",
-          text: `📚 Folder Synthesis Ready for "${folderAiTarget}". I can combine insights, create an exam study guide, or generate quiz questions across all files in this folder!`
+          text: `🔥 Folder Synthesis Armed for "${folderAiTarget}". I can mash up all files into a revision sheet or drop viva questions!`
         }
       ]);
       setFolderAiQuestion("");
@@ -337,7 +345,7 @@ export default function App() {
         email: regEmail.trim(),
         password: regPassword
       });
-      setAuthSuccess("Account created with 100 MB Free Quota! You can now sign in.");
+      setAuthSuccess("Account minted with 100 MB Free Quota! Signing in...");
       setTimeout(() => {
         setPortalMode("user");
         setLoginEmail(regEmail.trim());
@@ -414,7 +422,7 @@ export default function App() {
         otp: resetOtp.trim(),
         new_password: resetNewPass
       });
-      setAuthSuccess("Password successfully changed! Redirecting to sign in...");
+      setAuthSuccess("Password updated! Redirecting...");
       setTimeout(() => {
         setPortalMode("user");
         setLoginEmail(resetEmail.trim());
@@ -542,7 +550,7 @@ export default function App() {
     if (e) e.stopPropagation();
     try {
       const res = await axios.post(`${API_BASE}/documents/${docId}/offline`);
-      setUploadNotice(res.data.is_offline ? "📌 File pinned for Offline access." : "Removed file from Offline cache.");
+      setUploadNotice(res.data.is_offline ? "📌 Pinned for Offline access." : "Removed from Offline cache.");
       await fetchWorkspace();
     } catch (err) {
       console.error("Offline toggle failed:", err);
@@ -553,7 +561,7 @@ export default function App() {
     if (e) e.stopPropagation();
     try {
       const res = await axios.post(`${API_BASE}/documents/${docId}/spam`);
-      setUploadNotice(res.data.status === "Spam" ? "⚠️ File moved to Spam quarantine." : "✅ File restored from Spam.");
+      setUploadNotice(res.data.status === "Spam" ? "⚠️ Moved to Spam quarantine." : "✅ Restored from Spam.");
       await fetchWorkspace();
     } catch (err) {
       console.error("Spam toggle failed:", err);
@@ -745,470 +753,513 @@ export default function App() {
 
   const getFileIcon = (filename) => {
     const ext = filename.split(".").pop().toLowerCase();
-    if (["pdf"].includes(ext)) return <FileText className="w-6 h-6 text-rose-500" />;
-    if (["doc", "docx", "txt", "md"].includes(ext)) return <FileText className="w-6 h-6 text-violet-600" />;
-    if (["py", "js", "ts", "html", "css", "java", "sql"].includes(ext)) return <Code className="w-6 h-6 text-emerald-600" />;
-    if (["png", "jpg", "jpeg", "webp"].includes(ext)) return <ImageIcon className="w-6 h-6 text-orange-500" />;
-    if (["mp4", "mov", "avi"].includes(ext)) return <Video className="w-6 h-6 text-pink-600" />;
-    return <Package className="w-6 h-6 text-indigo-500" />;
+    if (["pdf"].includes(ext)) return <FileText className="w-7 h-7 text-[#FF007F]" />;
+    if (["doc", "docx", "txt", "md"].includes(ext)) return <FileText className="w-7 h-7 text-[#00F0FF]" />;
+    if (["py", "js", "ts", "html", "css", "java", "sql"].includes(ext)) return <Code className="w-7 h-7 text-[#CCFF00]" />;
+    if (["png", "jpg", "jpeg", "webp"].includes(ext)) return <ImageIcon className="w-7 h-7 text-[#FFBE0B]" />;
+    if (["mp4", "mov", "avi"].includes(ext)) return <Video className="w-7 h-7 text-[#8338EC]" />;
+    return <Package className="w-7 h-7 text-white" />;
   };
 
   // =========================================================
-  // VIEW 1: BRIGHT GEN-Z 3D NEO-GLASS AUTHENTICATION PORTAL
+  // VIEW 1: ASYMMETRICAL SPLIT-SCREEN 3D GRAFFITI AUTH STAGE
+  // (No basic centered box! Left 60% 3D Art Stage + Right 40% Tilted Vault Pass)
   // =========================================================
   if (!currentUser) {
     return (
-      <div className="relative flex min-h-screen w-screen items-center justify-center p-4 text-slate-900 overflow-hidden">
-        <Interactive3DBackground accent={portalMode === "admin" ? "coral" : "violet"} />
+      <div className="relative flex flex-col justify-between min-h-screen w-screen bg-halftone overflow-hidden">
+        <SplashCursor />
+        <ThreeGraffitiScene mode={portalMode} />
 
-        <div ref={cascadeContainerRef} className="relative z-10 w-full max-w-md gsap-3d-item">
-          <TiltSpotlightCard
-            maxTilt={7}
-            glowColor={portalMode === "admin" ? "rgba(249, 115, 22, 0.18)" : "rgba(219, 39, 119, 0.18)"}
-            className="rounded-3xl p-8"
-          >
-            <div className="mb-6 flex flex-col items-center text-center">
-              <div
-                className={`mb-3.5 flex h-14 w-14 items-center justify-center rounded-2xl neo-btn ${
-                  portalMode === "admin" ? "text-orange-500" : "text-violet-600"
+        {/* Top Diagonal Graffiti Caution Ticker */}
+        <div className="relative z-20">
+          <GraffitiTicker
+            items={[
+              "SMARTSORTER V8.0 GRAFFITI EDITION",
+              "THREE.JS WEBGL + GSAP + LENIS + REACT BITS",
+              "100 MB FREE ISOLATED QUOTA",
+              "1-TO-1 GMAIL DRIVE IDENTITY LOCK",
+              "GEMINI 2.5 FLASH MULTIMODAL ENGINE"
+            ]}
+            bg={portalMode === "admin" ? "bg-[#FFBE0B]" : "bg-[#CCFF00]"}
+          />
+        </div>
+
+        {/* Center Split-Screen Stage */}
+        <div
+          ref={cascadeContainerRef}
+          className="relative z-10 flex-1 grid grid-cols-1 lg:grid-cols-12 items-center px-6 md:px-14 py-6 gap-8 max-w-7xl mx-auto w-full"
+        >
+          {/* LEFT 7 COLUMNS: KINETIC STREET-ART POSTER & FLOATING STICKERS */}
+          <div className="lg:col-span-7 space-y-6 gsap-3d-item">
+            {/* Floating Mode Selector Stickers */}
+            <div className="flex flex-wrap items-center gap-4">
+              <MagneticButton
+                onClick={() => { setPortalMode("user"); setAuthError(""); setAuthSuccess(""); }}
+                className={`px-5 py-2.5 rounded-2xl font-extrabold text-xs uppercase tracking-wider -rotate-2 ${
+                  portalMode === "user"
+                    ? "bg-[#CCFF00] text-black"
+                    : "bg-[#181030] text-white border-white"
                 }`}
               >
-                {portalMode === "admin" ? <ShieldCheck className="h-7 w-7" /> : <Folder className="h-7 w-7" />}
+                ★ USER VAULT PASS
+              </MagneticButton>
+
+              <MagneticButton
+                onClick={() => { setPortalMode("admin"); setAuthError(""); setAuthSuccess(""); }}
+                className={`px-5 py-2.5 rounded-2xl font-extrabold text-xs uppercase tracking-wider rotate-2 flex items-center gap-2 ${
+                  portalMode === "admin"
+                    ? "bg-[#FFBE0B] text-black"
+                    : "bg-[#181030] text-[#FFBE0B] border-[#FFBE0B]"
+                }`}
+              >
+                <ShieldCheck className="w-4 h-4" />
+                <span>CREATOR OPS STUDIO</span>
+              </MagneticButton>
+            </div>
+
+            {/* Oversized Graffiti Decrypted Headline */}
+            <div className="space-y-2">
+              <div className="inline-block px-3 py-1 rounded-lg bg-[#FF007F] text-white font-mono-code font-extrabold text-xs uppercase tracking-widest border-2 border-black shadow-[4px_4px_0px_#000] -rotate-1">
+                {portalMode === "admin" ? "RESTRICTED CREATOR CONSOLE" : "BYOC CLOUD BRIDGE + AI SORTER"}
               </div>
-              <h1 className="text-2xl font-extrabold tracking-tight bg-gradient-to-r from-violet-700 via-fuchsia-600 to-orange-500 bg-clip-text text-transparent">
-                {portalMode === "admin" ? "Creator Studio 3D" : "SmartSorter 3D"}
+
+              <h1 className="text-5xl sm:text-7xl font-extrabold uppercase leading-[0.95] tracking-tighter text-white drop-shadow-[5px_5px_0px_#000]">
+                <DecryptedText text={portalMode === "admin" ? "CREATOR" : "SMART"} />
+                <br />
+                <span className="text-[#CCFF00] drop-shadow-[5px_5px_0px_#FF007F]">
+                  <DecryptedText text={portalMode === "admin" ? "CONTROL." : "SORTER."} />
+                </span>
               </h1>
-              <p className="mt-1 text-xs font-medium text-slate-500">
-                {portalMode === "admin"
-                  ? "Dedicated Project Telemetry, Governance & Support Console"
-                  : "Daylight Neo-Glass AI Workspace & Identity-Locked Cloud Bridge"}
+            </div>
+
+            {/* Live Typewriter Street-Art Subheadline */}
+            <div className="p-4 rounded-2xl bg-black/75 border-2 border-white/80 max-w-xl shadow-[6px_6px_0px_#00F0FF]">
+              <p className="font-mono-code text-sm sm:text-base font-bold text-[#00F0FF]">
+                &gt;{" "}
+                <TypewriterWords
+                  words={[
+                    "Sort Google Drive files with Gemini 2.5 Flash.",
+                    "Zero server bloat — 1-to-1 Gmail Identity Lock.",
+                    "SHA-256 Duplicate Quarantine & ZIP Exports.",
+                    "Ask Folder AI to generate instant exam notes."
+                  ]}
+                />
               </p>
             </div>
 
-            {(portalMode === "user" || portalMode === "admin") && (
-              <div className="mb-6 grid grid-cols-2 gap-2 rounded-2xl neo-recessed p-1.5">
-                <button
-                  type="button"
-                  onClick={() => { setPortalMode("user"); setAuthError(""); setAuthSuccess(""); }}
-                  className={`py-2.5 text-xs font-bold rounded-xl transition ${
-                    portalMode === "user" ? "neo-btn-active" : "text-slate-600 hover:text-violet-700"
-                  }`}
-                >
-                  User Workspace
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setPortalMode("admin"); setAuthError(""); setAuthSuccess(""); }}
-                  className={`flex items-center justify-center gap-1.5 py-2.5 text-xs font-bold rounded-xl transition ${
-                    portalMode === "admin"
-                      ? "bg-gradient-to-r from-orange-500 to-pink-500 text-white shadow-md"
-                      : "text-slate-600 hover:text-orange-600"
-                  }`}
-                >
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>Creator Admin</span>
-                </button>
-              </div>
-            )}
+            {/* Street-Art Feature Sticker Badges */}
+            <div className="flex flex-wrap gap-3 pt-2">
+              <span className="px-4 py-2 rounded-xl bg-[#8338EC] text-white font-extrabold text-xs border-2 border-black shadow-[4px_4px_0px_#CCFF00] -rotate-2">
+                ⚡ 100 MB FREE SANDBOX
+              </span>
+              <span className="px-4 py-2 rounded-xl bg-[#00F0FF] text-black font-extrabold text-xs border-2 border-black shadow-[4px_4px_0px_#FF007F] rotate-1">
+                🔒 1-TO-1 GMAIL LOCK
+              </span>
+              <span className="px-4 py-2 rounded-xl bg-[#FF007F] text-white font-extrabold text-xs border-2 border-black shadow-[4px_4px_0px_#000] -rotate-1">
+                🎨 3D WEBGL + REACT BITS
+              </span>
+            </div>
+          </div>
 
-            {authError && (
-              <div className="mb-4 flex items-center gap-2 rounded-2xl border border-rose-300 bg-rose-50 p-3 text-xs font-semibold text-rose-700">
-                <AlertCircle className="h-4 w-4 shrink-0 text-rose-500" />
-                <span>{authError}</span>
+          {/* RIGHT 5 COLUMNS: TILTED NEO-BRUTALIST VAULT PASS TERMINAL */}
+          <div className="lg:col-span-5 gsap-3d-item">
+            <TiltSpotlightCard
+              maxTilt={8}
+              variant={portalMode === "admin" ? "pink" : "lime"}
+              className="rounded-3xl p-7 sm:p-8 -rotate-1"
+            >
+              {/* Terminal Top Tag */}
+              <div className="flex items-center justify-between pb-4 mb-5 border-b-2 border-white/20">
+                <div className="flex items-center gap-2">
+                  <span className="w-3.5 h-3.5 rounded-full bg-[#FF007F] border border-black" />
+                  <span className="w-3.5 h-3.5 rounded-full bg-[#FFBE0B] border border-black" />
+                  <span className="w-3.5 h-3.5 rounded-full bg-[#CCFF00] border border-black" />
+                </div>
+                <span className="font-mono-code text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-0.5 rounded bg-white text-black">
+                  {portalMode.toUpperCase()} // GATEWAY
+                </span>
               </div>
-            )}
-            {authSuccess && (
-              <div className="mb-4 flex items-center gap-2 rounded-2xl border border-emerald-300 bg-emerald-50 p-3 text-xs font-semibold text-emerald-700">
-                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-                <span>{authSuccess}</span>
-              </div>
-            )}
 
-            {portalMode === "user" && (
-              <form onSubmit={(e) => handleLogin(e, false)} className="space-y-4">
-                <div>
-                  <label className="text-xs font-bold text-slate-700">Gmail / Email Address</label>
-                  <div className="relative mt-1.5">
-                    <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-violet-500" />
-                    <input
-                      type="email"
-                      required
-                      value={loginEmail}
-                      onChange={(e) => setLoginEmail(e.target.value)}
-                      placeholder="Enter your Gmail ID"
-                      className="w-full rounded-2xl neo-recessed py-3 pl-10 pr-4 text-xs font-medium text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-400"
-                    />
+              {authError && (
+                <div className="mb-4 flex items-center gap-2 rounded-2xl border-2 border-black bg-[#FF007F] p-3 text-xs font-extrabold text-white shadow-[4px_4px_0px_#000]">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  <span>{authError}</span>
+                </div>
+              )}
+              {authSuccess && (
+                <div className="mb-4 flex items-center gap-2 rounded-2xl border-2 border-black bg-[#CCFF00] p-3 text-xs font-extrabold text-black shadow-[4px_4px_0px_#000]">
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                  <span>{authSuccess}</span>
+                </div>
+              )}
+
+              {/* USER LOGIN FORM */}
+              {portalMode === "user" && (
+                <form onSubmit={(e) => handleLogin(e, false)} className="space-y-4">
+                  <div>
+                    <label className="font-mono-code text-xs font-extrabold uppercase text-[#CCFF00]">
+                      01 // GMAIL ADDRESS
+                    </label>
+                    <div className="relative mt-1.5">
+                      <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#00F0FF]" />
+                      <input
+                        type="email"
+                        required
+                        value={loginEmail}
+                        onChange={(e) => setLoginEmail(e.target.value)}
+                        placeholder="you@gmail.com"
+                        className="w-full rounded-2xl graffiti-input py-3 pl-10 pr-4 text-xs font-bold text-white placeholder-slate-500 focus:outline-none"
+                      />
+                    </div>
                   </div>
-                </div>
 
-                <div>
-                  <label className="text-xs font-bold text-slate-700">Password</label>
-                  <div className="relative mt-1.5">
-                    <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-pink-500" />
-                    <input
-                      type="password"
-                      required
-                      value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full rounded-2xl neo-recessed py-3 pl-10 pr-4 text-xs font-medium text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-pink-400"
-                    />
+                  <div>
+                    <label className="font-mono-code text-xs font-extrabold uppercase text-[#FF007F]">
+                      02 // SECRET PASSKEY
+                    </label>
+                    <div className="relative mt-1.5">
+                      <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#FF007F]" />
+                      <input
+                        type="password"
+                        required
+                        value={loginPassword}
+                        onChange={(e) => setLoginPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full rounded-2xl graffiti-input py-3 pl-10 pr-4 text-xs font-bold text-white placeholder-slate-500 focus:outline-none"
+                      />
+                    </div>
                   </div>
-                </div>
 
-                <MagneticButton
-                  type="submit"
-                  disabled={authLoading}
-                  className="w-full rounded-2xl neo-btn-active py-3 text-xs font-extrabold tracking-wide transition hover:brightness-105"
-                >
-                  {authLoading ? "Entering 3D Workspace..." : "Launch SmartSorter →"}
-                </MagneticButton>
-
-                <div className="flex items-center justify-between pt-2 text-xs font-semibold">
-                  <button
-                    type="button"
-                    onClick={() => { setPortalMode("register"); setAuthError(""); setAuthSuccess(""); }}
-                    className="text-slate-600 hover:text-violet-700"
+                  <MagneticButton
+                    type="submit"
+                    disabled={authLoading}
+                    className="w-full rounded-2xl bg-[#CCFF00] py-3.5 text-xs font-extrabold uppercase tracking-wider text-black"
                   >
-                    Create account (100 MB Free)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPortalMode("reset");
-                      setResetEmail(loginEmail);
-                      setResetStep(1);
-                      setResetOtp("");
-                      setOtpTimer(0);
-                      setAuthError("");
-                      setAuthSuccess("");
-                    }}
-                    className="text-pink-600 hover:text-violet-700"
-                  >
-                    Forgot password?
-                  </button>
-                </div>
-              </form>
-            )}
+                    {authLoading ? "UNLOCKING VAULT..." : "⚡ DROP INTO WORKSPACE →"}
+                  </MagneticButton>
 
-            {portalMode === "admin" && (
-              <form onSubmit={(e) => handleLogin(e, true)} className="space-y-4">
-                <div className="p-3 rounded-2xl bg-orange-50 border border-orange-200 text-[11px] text-orange-800 text-center font-semibold">
-                  Restricted to Project Creator: <strong>noragamiarota@gmail.com</strong>
-                </div>
+                  <div className="flex items-center justify-between pt-3 text-xs font-extrabold">
+                    <button
+                      type="button"
+                      onClick={() => { setPortalMode("register"); setAuthError(""); setAuthSuccess(""); }}
+                      className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-[#00F0FF] hover:text-black transition"
+                    >
+                      + MINT NEW ACCOUNT
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPortalMode("reset");
+                        setResetEmail(loginEmail);
+                        setResetStep(1);
+                        setResetOtp("");
+                        setOtpTimer(0);
+                        setAuthError("");
+                        setAuthSuccess("");
+                      }}
+                      className="text-[#FF007F] hover:underline"
+                    >
+                      LOST PASSKEY?
+                    </button>
+                  </div>
+                </form>
+              )}
 
-                <div>
-                  <label className="text-xs font-bold text-slate-700">Creator Admin Email</label>
-                  <div className="relative mt-1.5">
-                    <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-orange-500" />
+              {/* CREATOR ADMIN LOGIN FORM */}
+              {portalMode === "admin" && (
+                <form onSubmit={(e) => handleLogin(e, true)} className="space-y-4">
+                  <div className="p-3 rounded-xl bg-[#FFBE0B] text-black border-2 border-black font-mono-code text-[11px] font-extrabold text-center shadow-[4px_4px_0px_#000]">
+                    CREATOR LOCK: noragamiarota@gmail.com
+                  </div>
+
+                  <div>
+                    <label className="font-mono-code text-xs font-extrabold uppercase text-[#FFBE0B]">
+                      CREATOR GMAIL
+                    </label>
                     <input
                       type="email"
                       required
                       value={loginEmail}
                       onChange={(e) => setLoginEmail(e.target.value)}
                       placeholder="noragamiarota@gmail.com"
-                      className="w-full rounded-2xl neo-recessed py-3 pl-10 pr-4 text-xs font-medium text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-400"
+                      className="mt-1.5 w-full rounded-2xl graffiti-input py-3 px-4 text-xs font-bold text-white focus:outline-none"
                     />
                   </div>
-                </div>
 
-                <div>
-                  <label className="text-xs font-bold text-slate-700">Admin Password</label>
-                  <div className="relative mt-1.5">
-                    <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-orange-500" />
+                  <div>
+                    <label className="font-mono-code text-xs font-extrabold uppercase text-[#FF007F]">
+                      MASTER KEY
+                    </label>
                     <input
                       type="password"
                       required
                       value={loginPassword}
                       onChange={(e) => setLoginPassword(e.target.value)}
                       placeholder="••••••••"
-                      className="w-full rounded-2xl neo-recessed py-3 pl-10 pr-4 text-xs font-medium text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-400"
+                      className="mt-1.5 w-full rounded-2xl graffiti-input py-3 px-4 text-xs font-bold text-white focus:outline-none"
                     />
                   </div>
-                </div>
 
-                <MagneticButton
-                  type="submit"
-                  disabled={authLoading}
-                  className="w-full rounded-2xl bg-gradient-to-r from-orange-500 via-pink-500 to-rose-500 py-3 text-xs font-extrabold text-white shadow-lg shadow-orange-500/30"
-                >
-                  {authLoading ? "Verifying Creator..." : "Open Creator Studio →"}
-                </MagneticButton>
-              </form>
-            )}
+                  <MagneticButton
+                    type="submit"
+                    disabled={authLoading}
+                    className="w-full rounded-2xl bg-[#FFBE0B] py-3.5 text-xs font-extrabold uppercase tracking-wider text-black"
+                  >
+                    {authLoading ? "VERIFYING CREATOR..." : "🛡️ LAUNCH CREATOR DECK →"}
+                  </MagneticButton>
+                </form>
+              )}
 
-            {portalMode === "register" && (
-              <form onSubmit={handleRegister} className="space-y-4">
-                <div>
-                  <label className="text-xs font-bold text-slate-700">Full Name</label>
-                  <div className="relative mt-1.5">
-                    <UserIcon className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-violet-500" />
+              {/* REGISTER FORM */}
+              {portalMode === "register" && (
+                <form onSubmit={handleRegister} className="space-y-4">
+                  <div>
+                    <label className="font-mono-code text-xs font-extrabold uppercase text-[#00F0FF]">
+                      CREW HANDLE / NAME
+                    </label>
                     <input
                       type="text"
                       required
                       value={regName}
                       onChange={(e) => setRegName(e.target.value)}
-                      placeholder="Enter your name"
-                      className="w-full rounded-2xl neo-recessed py-3 pl-10 pr-4 text-xs font-medium text-slate-900 focus:outline-none"
+                      placeholder="Your Name"
+                      className="mt-1.5 w-full rounded-2xl graffiti-input py-3 px-4 text-xs font-bold text-white focus:outline-none"
                     />
                   </div>
-                </div>
 
-                <div>
-                  <label className="text-xs font-bold text-slate-700">Personal Gmail Address</label>
-                  <div className="relative mt-1.5">
-                    <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-violet-500" />
+                  <div>
+                    <label className="font-mono-code text-xs font-extrabold uppercase text-[#CCFF00]">
+                      PERSONAL GMAIL ID
+                    </label>
                     <input
                       type="email"
                       required
                       value={regEmail}
                       onChange={(e) => setRegEmail(e.target.value)}
                       placeholder="yourname@gmail.com"
-                      className="w-full rounded-2xl neo-recessed py-3 pl-10 pr-4 text-xs font-medium text-slate-900 focus:outline-none"
+                      className="mt-1.5 w-full rounded-2xl graffiti-input py-3 px-4 text-xs font-bold text-white focus:outline-none"
                     />
                   </div>
-                </div>
 
-                <div>
-                  <label className="text-xs font-bold text-slate-700">Password</label>
-                  <div className="relative mt-1.5">
-                    <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-pink-500" />
+                  <div>
+                    <label className="font-mono-code text-xs font-extrabold uppercase text-[#FF007F]">
+                      CREATE PASSKEY
+                    </label>
                     <input
                       type="password"
                       required
                       value={regPassword}
                       onChange={(e) => setRegPassword(e.target.value)}
-                      placeholder="Choose a password"
-                      className="w-full rounded-2xl neo-recessed py-3 pl-10 pr-4 text-xs font-medium text-slate-900 focus:outline-none"
+                      placeholder="Choose a strong password"
+                      className="mt-1.5 w-full rounded-2xl graffiti-input py-3 px-4 text-xs font-bold text-white focus:outline-none"
                     />
                   </div>
-                </div>
 
-                <MagneticButton
-                  type="submit"
-                  disabled={authLoading}
-                  className="w-full rounded-2xl neo-btn-active py-3 text-xs font-extrabold"
-                >
-                  {authLoading ? "Creating Account..." : "Create Account (100 MB Free) →"}
-                </MagneticButton>
+                  <MagneticButton
+                    type="submit"
+                    disabled={authLoading}
+                    className="w-full rounded-2xl bg-[#00F0FF] py-3.5 text-xs font-extrabold uppercase text-black"
+                  >
+                    {authLoading ? "MINTING..." : "★ MINT 100 MB FREE PASS →"}
+                  </MagneticButton>
 
-                <button
-                  type="button"
-                  onClick={() => { setPortalMode("user"); setAuthError(""); setAuthSuccess(""); }}
-                  className="flex w-full items-center justify-center gap-1.5 pt-2 text-xs font-semibold text-slate-600 hover:text-violet-700"
-                >
-                  <ArrowLeft className="h-3.5 w-3.5" /> Back to Sign In
-                </button>
-              </form>
-            )}
+                  <button
+                    type="button"
+                    onClick={() => { setPortalMode("user"); setAuthError(""); setAuthSuccess(""); }}
+                    className="flex w-full items-center justify-center gap-1.5 pt-2 text-xs font-bold text-slate-300 hover:text-[#CCFF00]"
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" /> BACK TO LOGIN
+                  </button>
+                </form>
+              )}
 
-            {portalMode === "reset" && (
-              <div className="space-y-4">
-                {resetStep === 1 && (
-                  <form onSubmit={handleSendOtp} className="space-y-4">
-                    <div>
-                      <label className="text-xs font-bold text-slate-700">Registered Account Email</label>
+              {/* 3-STEP OTP RECOVERY */}
+              {portalMode === "reset" && (
+                <div className="space-y-4">
+                  {resetStep === 1 && (
+                    <form onSubmit={handleSendOtp} className="space-y-4">
+                      <label className="font-mono-code text-xs font-extrabold uppercase text-[#00F0FF]">
+                        REGISTERED GMAIL
+                      </label>
                       <input
                         type="email"
                         required
                         value={resetEmail}
                         onChange={(e) => setResetEmail(e.target.value)}
-                        placeholder="Enter your registered Gmail"
-                        className="mt-1.5 w-full rounded-2xl neo-recessed py-3 px-4 text-xs font-medium text-slate-900 focus:outline-none"
+                        placeholder="Enter your Gmail"
+                        className="w-full rounded-2xl graffiti-input py-3 px-4 text-xs font-bold text-white focus:outline-none"
                       />
-                    </div>
-                    <MagneticButton
-                      type="submit"
-                      disabled={authLoading}
-                      className="w-full rounded-2xl neo-btn-active py-3 text-xs font-extrabold"
-                    >
-                      {authLoading ? "Dispatching OTP..." : "📧 Send 3-Min OTP to Email"}
-                    </MagneticButton>
-                  </form>
-                )}
-
-                {resetStep === 2 && (
-                  <form onSubmit={handleVerifyOtp} className="space-y-4">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-slate-700 font-bold">Enter 6-Digit OTP</span>
-                      <span className="font-mono font-bold text-pink-600">
-                        {otpTimer > 0 ? `⏱ ${formatCountdown(otpTimer)}` : "⏱ Expired"}
-                      </span>
-                    </div>
-                    <input
-                      type="text"
-                      maxLength={6}
-                      required
-                      disabled={otpTimer === 0}
-                      value={resetOtp}
-                      onChange={(e) => setResetOtp(e.target.value.replace(/\D/g, ""))}
-                      placeholder="• • • • • •"
-                      className="w-full rounded-2xl neo-recessed py-3 px-4 text-center tracking-[0.5em] text-lg font-extrabold text-violet-700 focus:outline-none"
-                    />
-                    {otpTimer > 0 ? (
                       <MagneticButton
                         type="submit"
-                        disabled={authLoading || resetOtp.length !== 6}
-                        className="w-full rounded-2xl neo-btn-active py-3 text-xs font-extrabold"
+                        disabled={authLoading}
+                        className="w-full rounded-2xl bg-[#CCFF00] py-3.5 text-xs font-extrabold text-black uppercase"
                       >
-                        Verify OTP →
+                        {authLoading ? "DISPATCHING..." : "📧 DISPATCH 3-MIN OTP"}
                       </MagneticButton>
-                    ) : (
+                    </form>
+                  )}
+
+                  {resetStep === 2 && (
+                    <form onSubmit={handleVerifyOtp} className="space-y-4">
+                      <div className="flex items-center justify-between text-xs font-mono-code">
+                        <span className="text-[#CCFF00] font-bold">6-DIGIT CODE</span>
+                        <span className="px-2 py-0.5 rounded bg-[#FF007F] text-white font-extrabold">
+                          {otpTimer > 0 ? `⏱ ${formatCountdown(otpTimer)}` : "EXPIRED"}
+                        </span>
+                      </div>
+                      <input
+                        type="text"
+                        maxLength={6}
+                        required
+                        disabled={otpTimer === 0}
+                        value={resetOtp}
+                        onChange={(e) => setResetOtp(e.target.value.replace(/\D/g, ""))}
+                        placeholder="• • • • • •"
+                        className="w-full rounded-2xl graffiti-input py-3 px-4 text-center tracking-[0.5em] text-lg font-extrabold text-[#CCFF00] focus:outline-none"
+                      />
+                      {otpTimer > 0 ? (
+                        <MagneticButton
+                          type="submit"
+                          disabled={authLoading || resetOtp.length !== 6}
+                          className="w-full rounded-2xl bg-[#00F0FF] py-3.5 text-xs font-extrabold text-black uppercase"
+                        >
+                          VERIFY OTP →
+                        </MagneticButton>
+                      ) : (
+                        <MagneticButton
+                          type="button"
+                          onClick={handleSendOtp}
+                          className="w-full rounded-2xl bg-[#FFBE0B] py-3.5 text-xs font-extrabold text-black uppercase"
+                        >
+                          ↻ RESEND OTP
+                        </MagneticButton>
+                      )}
+                    </form>
+                  )}
+
+                  {resetStep === 3 && (
+                    <form onSubmit={handleResetPassword} className="space-y-4">
+                      <input
+                        type="password"
+                        required
+                        value={resetNewPass}
+                        onChange={(e) => setResetNewPass(e.target.value)}
+                        placeholder="New Passkey"
+                        className="w-full rounded-2xl graffiti-input py-3 px-4 text-xs font-bold text-white focus:outline-none"
+                      />
+                      <input
+                        type="password"
+                        required
+                        value={resetConfirmPass}
+                        onChange={(e) => setResetConfirmPass(e.target.value)}
+                        placeholder="Confirm Passkey"
+                        className="w-full rounded-2xl graffiti-input py-3 px-4 text-xs font-bold text-white focus:outline-none"
+                      />
                       <MagneticButton
-                        type="button"
-                        onClick={handleSendOtp}
-                        className="w-full rounded-2xl bg-orange-500 py-3 text-xs font-extrabold text-white"
+                        type="submit"
+                        disabled={authLoading}
+                        className="w-full rounded-2xl bg-[#CCFF00] py-3.5 text-xs font-extrabold text-black uppercase"
                       >
-                        ↻ Resend OTP
+                        LOCK IN NEW PASSKEY
                       </MagneticButton>
-                    )}
-                  </form>
-                )}
+                    </form>
+                  )}
 
-                {resetStep === 3 && (
-                  <form onSubmit={handleResetPassword} className="space-y-4">
-                    <input
-                      type="password"
-                      required
-                      value={resetNewPass}
-                      onChange={(e) => setResetNewPass(e.target.value)}
-                      placeholder="Enter new password"
-                      className="w-full rounded-2xl neo-recessed py-3 px-4 text-xs font-medium text-slate-900 focus:outline-none"
-                    />
-                    <input
-                      type="password"
-                      required
-                      value={resetConfirmPass}
-                      onChange={(e) => setResetConfirmPass(e.target.value)}
-                      placeholder="Confirm new password"
-                      className="w-full rounded-2xl neo-recessed py-3 px-4 text-xs font-medium text-slate-900 focus:outline-none"
-                    />
-                    <MagneticButton
-                      type="submit"
-                      disabled={authLoading}
-                      className="w-full rounded-2xl bg-emerald-500 py-3 text-xs font-extrabold text-white"
-                    >
-                      Save New Password
-                    </MagneticButton>
-                  </form>
-                )}
+                  <button
+                    type="button"
+                    onClick={() => { setPortalMode("user"); setResetStep(1); setResetOtp(""); setOtpTimer(0); }}
+                    className="flex w-full items-center justify-center gap-1.5 pt-2 text-xs font-bold text-slate-300 hover:text-white"
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" /> BACK TO LOGIN
+                  </button>
+                </div>
+              )}
+            </TiltSpotlightCard>
+          </div>
+        </div>
 
-                <button
-                  type="button"
-                  onClick={() => { setPortalMode("user"); setResetStep(1); setResetOtp(""); setOtpTimer(0); }}
-                  className="flex w-full items-center justify-center gap-1.5 pt-2 text-xs font-semibold text-slate-600 hover:text-violet-700"
-                >
-                  <ArrowLeft className="h-3.5 w-3.5" /> Back to Sign In
-                </button>
-              </div>
-            )}
-          </TiltSpotlightCard>
+        {/* Bottom Street-Art Ticker */}
+        <div className="relative z-20">
+          <GraffitiTicker
+            items={[
+              "NO SIDEBAR CLUTTER",
+              "FLOATING 3D DOCK NAVIGATION",
+              "DECRYPTED TEXT SCRAMBLE",
+              "SPRAY-PAINT CURSOR PHYSICS"
+            ]}
+            bg="bg-[#FF007F]"
+            textCol="text-white"
+          />
         </div>
       </div>
     );
   }
 
   // =========================================================
-  // VIEW 2A: DEDICATED BRIGHT CREATOR OPERATIONS CONSOLE
+  // VIEW 2A: DEDICATED CREATOR OPERATIONS STUDIO (FLOATING DOCK LAYOUT)
   // =========================================================
   if (isCreatorAdmin) {
     const filteredTickets = feedbackList.filter((t) =>
       ticketFilter === "All" ? true : (t.status || "Open") === ticketFilter
     );
 
+    const creatorDockItems = [
+      { id: "telemetry", label: "Telemetry Deck", icon: HardDrive, bg: "bg-[#FFBE0B]" },
+      { id: "support", label: "Support Desk", icon: HelpCircle, count: adminData.open_tickets_count, bg: "bg-[#FF007F]" },
+      { id: "users", label: "User Governance", icon: Shield, count: adminData.member_count, bg: "bg-[#00F0FF]" },
+      { id: "audit", label: "Audit Stream", icon: Clock, bg: "bg-[#CCFF00]" }
+    ];
+
     return (
-      <div className="relative flex h-screen w-screen overflow-hidden text-slate-900">
-        <Interactive3DBackground accent="coral" />
+      <div className="relative flex flex-col h-screen w-screen bg-halftone overflow-hidden">
+        <SplashCursor />
+        <ThreeGraffitiScene mode="admin" />
 
-        <aside className="relative z-10 w-64 m-3 rounded-3xl neo-glass flex flex-col justify-between p-5 shrink-0 select-none">
-          <div>
-            <div className="flex items-center gap-3 pb-5 mb-4 border-b border-slate-200/80">
-              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-orange-500 to-pink-500 flex items-center justify-center text-white font-extrabold shadow-md">
-                <ShieldCheck className="w-6 h-6" />
-              </div>
-              <div>
-                <h1 className="text-base font-extrabold text-slate-900">Creator Studio</h1>
-                <p className="text-[11px] text-orange-600 font-bold">Project Operations</p>
-              </div>
+        {/* Top Floating Creator Header Bar */}
+        <header className="relative z-20 mx-6 mt-4 px-6 py-4 rounded-3xl graffiti-card-pink flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-[#FFBE0B] border-2 border-black shadow-[4px_4px_0px_#000] flex items-center justify-center text-black font-extrabold">
+              <ShieldCheck className="w-6 h-6" />
             </div>
-
-            <nav className="space-y-2">
-              {[
-                { id: "telemetry", label: "Project Telemetry", icon: HardDrive },
-                { id: "support", label: "Support Desk", icon: HelpCircle, badge: adminData.open_tickets_count },
-                { id: "users", label: "User Governance", icon: Shield, badge: adminData.member_count },
-                { id: "audit", label: "Security Audit", icon: Clock }
-              ].map((item) => {
-                const IconComp = item.icon;
-                const active = creatorTab === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => setCreatorTab(item.id)}
-                    className={`w-full flex items-center justify-between px-4 py-3 rounded-2xl text-xs font-bold transition ${
-                      active
-                        ? "bg-gradient-to-r from-orange-500 to-pink-500 text-white shadow-md"
-                        : "neo-btn text-slate-700 hover:text-orange-600"
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <IconComp className="w-4 h-4" />
-                      <span>{item.label}</span>
-                    </div>
-                    {item.badge > 0 && (
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
-                        active ? "bg-white/25 text-white" : "bg-orange-100 text-orange-700"
-                      }`}>
-                        {item.badge}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </nav>
+            <div>
+              <h1 className="text-xl font-extrabold uppercase tracking-tight text-white">
+                <DecryptedText text="CREATOR // OPS STUDIO" />
+              </h1>
+              <p className="font-mono-code text-[11px] text-[#FFBE0B]">
+                {currentUser.email} • WORK & TELEMETRY ONLY
+              </p>
+            </div>
           </div>
 
-          <div className="flex items-center justify-between p-3 rounded-2xl neo-recessed">
-            <div className="overflow-hidden">
-              <p className="text-xs font-extrabold text-slate-900 truncate">{currentUser.name}</p>
-              <p className="text-[10px] text-orange-600 font-semibold truncate">{currentUser.email}</p>
-            </div>
-            <button onClick={handleSignOut} className="text-slate-500 hover:text-rose-600 p-1.5">
+          <div className="flex items-center gap-3">
+            <MagneticButton
+              onClick={handleExportAuditCsv}
+              className="px-4 py-2.5 rounded-2xl bg-[#00F0FF] text-black text-xs font-extrabold uppercase flex items-center gap-1.5"
+            >
+              <Download className="w-4 h-4" /> Export CSV
+            </MagneticButton>
+            <MagneticButton
+              onClick={fetchWorkspace}
+              className="px-4 py-2.5 rounded-2xl bg-[#CCFF00] text-black text-xs font-extrabold uppercase flex items-center gap-1.5"
+            >
+              <RefreshCw className="w-4 h-4" /> Sync Live
+            </MagneticButton>
+            <MagneticButton
+              onClick={handleSignOut}
+              className="p-2.5 rounded-2xl bg-[#FF007F] text-white"
+              title="Sign Out"
+            >
               <LogOut className="w-4 h-4" />
-            </button>
+            </MagneticButton>
           </div>
-        </aside>
+        </header>
 
-        <main ref={mainScrollRef} className="relative z-10 flex-1 overflow-y-auto p-6">
-          <div ref={cascadeContainerRef} className="space-y-6">
-            <header className="neo-glass rounded-3xl p-5 flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-extrabold bg-gradient-to-r from-slate-900 via-violet-800 to-pink-600 bg-clip-text text-transparent">
-                  {creatorTab === "telemetry" && "3D Project Telemetry & Global AI Health"}
-                  {creatorTab === "support" && "Two-Way Support & Issue Resolution Desk"}
-                  {creatorTab === "users" && "User Accounts & Identity-Bound Cloud Governance"}
-                  {creatorTab === "audit" && "Chronological Security & System Audit"}
-                </h2>
-                <p className="text-xs font-medium text-slate-500">Daylight Neo-Glass Operations Console</p>
-              </div>
-              <div className="flex gap-2.5">
-                <MagneticButton
-                  onClick={handleExportAuditCsv}
-                  className="neo-btn px-4 py-2.5 rounded-2xl text-xs font-bold text-violet-700 flex items-center gap-2"
-                >
-                  <Download className="w-3.5 h-3.5" /> Export Audit CSV
-                </MagneticButton>
-                <MagneticButton
-                  onClick={fetchWorkspace}
-                  className="bg-gradient-to-r from-orange-500 to-pink-500 text-white px-4 py-2.5 rounded-2xl text-xs font-extrabold flex items-center gap-2 shadow-md"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" /> Sync Telemetry
-                </MagneticButton>
-              </div>
-            </header>
-
+        {/* Main Lenis Smooth Scroll Canvas */}
+        <main ref={mainScrollRef} className="relative z-10 flex-1 overflow-y-auto px-6 pt-6 pb-28">
+          <div ref={cascadeContainerRef} className="max-w-7xl mx-auto space-y-6">
             {uploadNotice && (
-              <div className="neo-glass rounded-2xl px-4 py-3 text-xs font-bold text-emerald-700 flex justify-between">
+              <div className="graffiti-card rounded-2xl px-5 py-3 text-xs font-extrabold text-[#CCFF00] flex justify-between">
                 <span>{uploadNotice}</span>
                 <button onClick={() => setUploadNotice("")}><X className="w-4 h-4" /></button>
               </div>
@@ -1216,45 +1267,51 @@ export default function App() {
 
             {creatorTab === "telemetry" && (
               <>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
                   {[
-                    { label: "Registered Users", val: adminData.member_count, sub: `${adminData.pro_subscribers} Pro • ${adminData.linked_drives_count} Linked`, col: "text-violet-600" },
-                    { label: "Total Files Sorted", val: adminData.total_files_classified, sub: `${adminData.active_files} Active • ${adminData.spam_files} Spam`, col: "text-pink-600" },
-                    { label: "Open Support Issues", val: adminData.open_tickets_count, sub: "Click Support Desk to reply", col: "text-orange-500" },
-                    { label: "Global Index Size", val: `${adminData.total_storage_mb} MB`, sub: "SQLite WAL Active", col: "text-emerald-600" }
+                    { label: "REGISTERED CREW", val: adminData.member_count, sub: `${adminData.pro_subscribers} Pro • ${adminData.linked_drives_count} Bound Drives`, bg: "bg-[#00F0FF]", variant: "cyan" },
+                    { label: "FILES SORTED", val: adminData.total_files_classified, sub: `${adminData.active_files} Active • ${adminData.spam_files} Spam`, bg: "bg-[#CCFF00]", variant: "lime" },
+                    { label: "OPEN TICKETS", val: adminData.open_tickets_count, sub: "Click Support Dock to reply", bg: "bg-[#FF007F]", variant: "pink" },
+                    { label: "SQLITE WAL INDEX", val: `${adminData.total_storage_mb} MB`, sub: "Zero Server Bloat Active", bg: "bg-[#FFBE0B]", variant: "lime" }
                   ].map((k, i) => (
-                    <TiltSpotlightCard key={i} glowColor="rgba(236, 72, 153, 0.14)" className="rounded-3xl p-5 gsap-3d-item">
-                      <p className="text-[11px] uppercase font-extrabold text-slate-500">{k.label}</p>
-                      <p className={`text-3xl font-extrabold mt-1 ${k.col}`}>{k.val}</p>
-                      <p className="text-xs font-medium text-slate-500 mt-1">{k.sub}</p>
+                    <TiltSpotlightCard key={i} variant={k.variant} className="rounded-3xl p-5 gsap-3d-item">
+                      <span className={`inline-block px-2.5 py-0.5 rounded-md border border-black font-mono-code text-[10px] font-extrabold text-black ${k.bg}`}>
+                        {k.label}
+                      </span>
+                      <p className="text-4xl font-extrabold text-white mt-3">{k.val}</p>
+                      <p className="text-xs font-bold text-slate-300 mt-1">{k.sub}</p>
                     </TiltSpotlightCard>
                   ))}
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <TiltSpotlightCard className="rounded-3xl p-6 gsap-3d-item">
-                    <h3 className="text-sm font-extrabold text-slate-800 mb-3">Global AI Classification Distribution</h3>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <TiltSpotlightCard variant="cyan" className="rounded-3xl p-6 gsap-3d-item">
+                    <h3 className="text-base font-extrabold uppercase text-[#00F0FF] mb-4">
+                      Global AI Classification Breakdown
+                    </h3>
                     <div className="space-y-2.5">
                       {(adminData.global_categories || []).map((c) => (
-                        <div key={c.category} className="neo-recessed p-3 rounded-2xl flex justify-between text-xs">
-                          <span className="font-bold text-slate-800">{c.category}</span>
-                          <span className="font-extrabold text-violet-600">{c.count} files ({c.size_kb} KB)</span>
+                        <div key={c.category} className="p-3 rounded-2xl bg-black/60 border-2 border-white/20 flex justify-between text-xs font-bold">
+                          <span>{c.category}</span>
+                          <span className="text-[#CCFF00] font-mono-code">{c.count} files ({c.size_kb} KB)</span>
                         </div>
                       ))}
                     </div>
                   </TiltSpotlightCard>
 
-                  <TiltSpotlightCard className="rounded-3xl p-6 gsap-3d-item">
-                    <h3 className="text-sm font-extrabold text-slate-800 mb-3">Live Security & Activity Stream</h3>
+                  <TiltSpotlightCard variant="pink" className="rounded-3xl p-6 gsap-3d-item">
+                    <h3 className="text-base font-extrabold uppercase text-[#FF007F] mb-4">
+                      Live Security & Audit Stream
+                    </h3>
                     <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
                       {activity.slice(0, 8).map((act) => (
-                        <div key={act.id} className="neo-recessed p-3 rounded-2xl text-xs">
-                          <div className="flex justify-between text-pink-600 font-bold">
+                        <div key={act.id} className="p-3 rounded-2xl bg-black/60 border-2 border-white/20 text-xs">
+                          <div className="flex justify-between font-mono-code text-[#CCFF00] font-bold">
                             <span>{act.username}</span>
-                            <span className="font-mono text-[10px] text-slate-500">{formatTimestamp(act.timestamp)}</span>
+                            <span className="text-[10px] text-slate-400">{formatTimestamp(act.timestamp)}</span>
                           </div>
-                          <p className="text-slate-900 font-bold mt-0.5">{act.action}</p>
-                          <p className="text-[11px] text-slate-600 italic">{act.details}</p>
+                          <p className="text-white font-extrabold mt-0.5">{act.action}</p>
+                          <p className="text-[11px] text-slate-300">{act.details}</p>
                         </div>
                       ))}
                     </div>
@@ -1265,48 +1322,50 @@ export default function App() {
 
             {creatorTab === "support" && (
               <div className="space-y-4">
-                <div className="flex gap-2">
+                <div className="flex gap-3">
                   {["All", "Open", "Resolved"].map((st) => (
-                    <button
+                    <MagneticButton
                       key={st}
                       onClick={() => setTicketFilter(st)}
-                      className={`px-4 py-2 rounded-2xl text-xs font-bold ${
-                        ticketFilter === st ? "neo-btn-active" : "neo-btn text-slate-700"
+                      className={`px-4 py-2 rounded-2xl text-xs font-extrabold uppercase ${
+                        ticketFilter === st ? "bg-[#CCFF00] text-black" : "bg-[#181030] text-white border-white"
                       }`}
                     >
                       {st} Tickets
-                    </button>
+                    </MagneticButton>
                   ))}
                 </div>
                 {filteredTickets.map((t) => (
-                  <TiltSpotlightCard key={t.id} maxTilt={4} className="rounded-3xl p-5 space-y-3 gsap-3d-item">
+                  <TiltSpotlightCard key={t.id} variant="pink" maxTilt={4} className="rounded-3xl p-6 space-y-3 gsap-3d-item">
                     <div className="flex justify-between items-center text-xs">
-                      <span className="font-extrabold text-slate-900">
-                        #{t.id} • {t.username} ({t.user_email}) — <span className="text-violet-600">{t.category}</span>
+                      <span className="font-extrabold text-white">
+                        #{t.id} • {t.username} ({t.user_email}) — <span className="text-[#00F0FF]">{t.category}</span>
                       </span>
-                      <span className="px-3 py-0.5 rounded-full bg-orange-100 text-orange-700 font-bold">
+                      <span className="px-3 py-0.5 rounded-full bg-[#CCFF00] text-black font-extrabold">
                         {t.status || "Open"}
                       </span>
                     </div>
-                    <div className="neo-recessed p-3.5 rounded-2xl text-xs font-medium text-slate-800">{t.message}</div>
+                    <div className="p-4 rounded-2xl bg-black/70 border-2 border-white/30 text-xs font-bold text-white">
+                      {t.message}
+                    </div>
                     {t.admin_reply && (
-                      <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800">
-                        <strong>Creator Reply:</strong> {t.admin_reply}
+                      <div className="p-3.5 rounded-2xl bg-[#00F0FF]/20 border-2 border-[#00F0FF] text-xs text-[#00F0FF] font-bold">
+                        <strong>CREATOR REPLY:</strong> {t.admin_reply}
                       </div>
                     )}
-                    <div className="flex gap-2">
+                    <div className="flex gap-3">
                       <input
                         type="text"
                         value={replyInputs[t.id] || ""}
                         onChange={(e) => setReplyInputs((p) => ({ ...p, [t.id]: e.target.value }))}
-                        placeholder={`Reply to ${t.username}...`}
-                        className="flex-1 neo-recessed rounded-2xl px-4 py-2.5 text-xs text-slate-900 focus:outline-none"
+                        placeholder={`Drop official response to ${t.username}...`}
+                        className="flex-1 rounded-2xl graffiti-input px-4 py-2.5 text-xs font-bold text-white focus:outline-none"
                       />
                       <MagneticButton
                         onClick={() => handleReplyTicket(t.id, "Resolved")}
-                        className="neo-btn-active px-4 py-2.5 rounded-2xl text-xs font-extrabold"
+                        className="bg-[#CCFF00] text-black px-5 py-2.5 rounded-2xl text-xs font-extrabold uppercase"
                       >
-                        Send Reply & Resolve
+                        Send & Resolve
                       </MagneticButton>
                     </div>
                   </TiltSpotlightCard>
@@ -1315,34 +1374,34 @@ export default function App() {
             )}
 
             {creatorTab === "users" && (
-              <div className="neo-glass rounded-3xl overflow-hidden gsap-3d-item">
+              <div className="graffiti-card rounded-3xl overflow-hidden gsap-3d-item">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-violet-50/70 text-slate-600 uppercase text-[10px] font-extrabold border-b border-slate-200">
+                  <thead className="bg-black/80 text-[#CCFF00] font-mono-code uppercase text-[11px] border-b-2 border-white">
                     <tr>
-                      <th className="py-3.5 px-4">User</th>
-                      <th className="py-3.5 px-4">Plan</th>
-                      <th className="py-3.5 px-4">Bound Storage</th>
-                      <th className="py-3.5 px-4">Sorted</th>
-                      <th className="py-3.5 px-4">Status</th>
-                      <th className="py-3.5 px-4 text-right">Action</th>
+                      <th className="py-4 px-4">User</th>
+                      <th className="py-4 px-4">Plan</th>
+                      <th className="py-4 px-4">Identity-Bound Storage</th>
+                      <th className="py-4 px-4">Sorted</th>
+                      <th className="py-4 px-4">Status</th>
+                      <th className="py-4 px-4 text-right">Governance</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-200/60">
+                  <tbody className="divide-y divide-white/15 font-bold">
                     {adminData.users.map((u) => (
-                      <tr key={u.id}>
-                        <td className="py-3.5 px-4 font-bold text-slate-900">{u.name} ({u.email})</td>
-                        <td className="py-3.5 px-4 text-violet-700 font-bold">{u.subscription_plan}</td>
-                        <td className="py-3.5 px-4 text-slate-600">{u.cloud_provider}</td>
-                        <td className="py-3.5 px-4 font-semibold">{u.total_classified} files ({u.storage_kb} KB)</td>
-                        <td className="py-3.5 px-4 font-bold">{u.status}</td>
+                      <tr key={u.id} className="hover:bg-white/5">
+                        <td className="py-3.5 px-4">{u.name} ({u.email})</td>
+                        <td className="py-3.5 px-4 text-[#00F0FF]">{u.subscription_plan}</td>
+                        <td className="py-3.5 px-4">{u.cloud_provider}</td>
+                        <td className="py-3.5 px-4">{u.total_classified} files ({u.storage_kb} KB)</td>
+                        <td className="py-3.5 px-4">{u.status}</td>
                         <td className="py-3.5 px-4 text-right">
                           {u.email.toLowerCase() !== CREATOR_EMAIL.toLowerCase() && (
-                            <button
+                            <MagneticButton
                               onClick={() => handleToggleUserStatus(u)}
-                              className="neo-btn px-3 py-1 rounded-xl text-[11px] font-bold text-pink-600"
+                              className="px-3 py-1 rounded-xl bg-[#FF007F] text-white text-[11px] font-extrabold"
                             >
                               {u.status === "Suspended" ? "Activate" : "Suspend"}
-                            </button>
+                            </MagneticButton>
                           )}
                         </td>
                       </tr>
@@ -1353,23 +1412,23 @@ export default function App() {
             )}
 
             {creatorTab === "audit" && (
-              <div className="neo-glass rounded-3xl overflow-hidden gsap-3d-item">
+              <div className="graffiti-card-cyan rounded-3xl overflow-hidden gsap-3d-item">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-violet-50/70 text-slate-600 uppercase text-[10px] font-extrabold border-b border-slate-200">
+                  <thead className="bg-black/80 text-[#00F0FF] font-mono-code uppercase text-[11px] border-b-2 border-white">
                     <tr>
-                      <th className="py-3.5 px-4">Timestamp</th>
-                      <th className="py-3.5 px-4">User</th>
-                      <th className="py-3.5 px-4">Action</th>
-                      <th className="py-3.5 px-4">Metadata</th>
+                      <th className="py-4 px-4">Timestamp</th>
+                      <th className="py-4 px-4">User</th>
+                      <th className="py-4 px-4">Action</th>
+                      <th className="py-4 px-4">Details</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-200/60">
+                  <tbody className="divide-y divide-white/15 font-bold">
                     {activity.map((act) => (
                       <tr key={act.id}>
-                        <td className="py-3 px-4 font-mono text-slate-600">{formatTimestamp(act.timestamp)}</td>
-                        <td className="py-3 px-4 font-bold text-slate-900">{act.username}</td>
-                        <td className="py-3 px-4 font-bold text-violet-600">{act.action}</td>
-                        <td className="py-3 px-4 text-slate-600 italic">{act.details}</td>
+                        <td className="py-3 px-4 font-mono-code text-slate-300">{formatTimestamp(act.timestamp)}</td>
+                        <td className="py-3 px-4 text-white">{act.username}</td>
+                        <td className="py-3 px-4 text-[#CCFF00]">{act.action}</td>
+                        <td className="py-3 px-4 text-slate-300">{act.details}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1378,12 +1437,19 @@ export default function App() {
             )}
           </div>
         </main>
+
+        {/* Bottom Floating 3D Creator Dock */}
+        <FloatingGraffitiDock
+          items={creatorDockItems}
+          activeId={creatorTab}
+          onSelect={(id) => setCreatorTab(id)}
+        />
       </div>
     );
   }
 
   // =========================================================
-  // VIEW 2B: BRIGHT GEN-Z 3D NEO-GLASS USER WORKSPACE
+  // VIEW 2B: USER GRAFFITI 3D STUDIO (TOP HUD + FLOATING DOCK)
   // =========================================================
   const allCategoryOptions = Array.from(
     new Set([...STANDARD_CATEGORIES, ...customCategories, ...Object.keys(summary.category_counts || {})])
@@ -1411,393 +1477,372 @@ export default function App() {
 
   const quotaMb = summary.storage_limit_mb || 100;
   const usedMb = summary.total_storage_mb || 0;
-  const storagePercent = usedMb > 0 ? Math.max(Math.min(Math.round((usedMb / quotaMb) * 100), 100), 3) : 2;
+  const storagePercent = usedMb > 0 ? Math.max(Math.min(Math.round((usedMb / quotaMb) * 100), 100), 4) : 3;
   const quotaDisplayLabel = summary.cloud_linked
-    ? `${usedMb} MB of ${(quotaMb / 1024).toFixed(0)} GB used (${summary.cloud_email})`
-    : `${usedMb} MB of 100 MB used`;
+    ? `${usedMb} MB / ${(quotaMb / 1024).toFixed(0)} GB (${summary.cloud_email})`
+    : `${usedMb} MB / 100 MB FREE`;
+
+  const userDockItems = [
+    { id: "library", label: "Vault", icon: Folder, bg: "bg-[#CCFF00]" },
+    { id: "recent", label: "Recent", icon: Clock, bg: "bg-[#00F0FF]" },
+    { id: "uploads", label: "Uploads", icon: Upload, count: summary.active_files_count, bg: "bg-[#FF007F]" },
+    { id: "offline", label: "Offline", icon: CheckCircle2, count: summary.offline_files_count, bg: "bg-[#FFBE0B]" },
+    { id: "bin", label: "Bin", icon: Trash2, count: summary.bin_files_count, bg: "bg-[#FF007F]" },
+    { id: "spam", label: "Spam", icon: AlertOctagon, count: summary.spam_files_count, bg: "bg-[#FFBE0B]" },
+    { id: "storage", label: "Cloud Bridge", icon: Cloud, bg: "bg-[#00F0FF]" },
+    { id: "settings", label: "Rules", icon: Settings, bg: "bg-[#CCFF00]" },
+    { id: "help", label: "Support", icon: HelpCircle, bg: "bg-[#FF007F]" }
+  ];
 
   return (
-    <div className="relative flex h-screen w-screen overflow-hidden text-slate-900">
-      <Interactive3DBackground accent="violet" />
+    <div className="relative flex flex-col h-screen w-screen bg-halftone overflow-hidden">
+      <SplashCursor />
+      <ThreeGraffitiScene mode="user" />
 
-      {/* 1. 3D FLOATING DAYLIGHT NEO-GLASS SIDEBAR */}
-      <aside className="relative z-10 w-64 m-3 rounded-3xl neo-glass flex flex-col justify-between py-5 px-3.5 shrink-0 select-none overflow-y-auto">
-        <div>
-          <div className="px-3 pb-4 mb-3 border-b border-slate-200/80">
-            <h1 className="text-lg font-extrabold tracking-tight bg-gradient-to-r from-violet-700 via-fuchsia-600 to-orange-500 bg-clip-text text-transparent flex items-center gap-2">
-              <span>SmartSorter 3D</span>
-              {summary.subscription_plan !== "Free" && (
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-fuchsia-100 text-fuchsia-700 font-extrabold">
-                  PRO
-                </span>
-              )}
-            </h1>
-            <p className="text-[11px] font-medium text-slate-500 truncate mt-0.5">
-              {summary.cloud_linked ? `🔒 Bound: ${currentUser.email}` : "100 MB Free Workspace"}
+      {/* 1. TOP FLOATING GRAFFITI HUD BAR (REPLACES TRADITIONAL HEADER & SIDEBAR) */}
+      <header className="relative z-20 mx-4 md:mx-8 mt-4 px-5 py-3.5 rounded-3xl graffiti-card flex flex-wrap items-center justify-between gap-4">
+        {/* Brand + Identity Lock Pill */}
+        <div className="flex items-center gap-3">
+          <div className="w-11 h-11 rounded-2xl bg-[#CCFF00] border-2 border-black shadow-[4px_4px_0px_#FF007F] flex items-center justify-center text-black font-extrabold -rotate-3">
+            <Zap className="w-6 h-6" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg md:text-xl font-extrabold uppercase tracking-tight text-white">
+                <DecryptedText text="SMARTSORTER // 3D" />
+              </h1>
+              <span className="px-2 py-0.5 rounded-md bg-[#FF007F] text-white font-mono-code text-[10px] font-extrabold border border-black">
+                {summary.subscription_plan.toUpperCase()}
+              </span>
+            </div>
+            <p className="font-mono-code text-[11px] text-[#00F0FF] truncate">
+              {summary.cloud_linked ? `🔒 DRIVE BOUND: ${currentUser.email}` : `⚡ ${quotaDisplayLabel}`}
             </p>
           </div>
-
-          <nav className="space-y-1">
-            {[
-              { id: "library", label: "Files & Folders", icon: Folder },
-              { id: "recent", label: "Recent", icon: Clock },
-              { id: "uploads", label: "Uploads", icon: Upload, count: summary.active_files_count },
-              { id: "offline", label: "Offline", icon: CheckCircle2, count: summary.offline_files_count },
-              { id: "bin", label: "Bin", icon: Trash2, count: summary.bin_files_count },
-              { id: "spam", label: "Spam", icon: AlertOctagon, count: summary.spam_files_count },
-              { id: "settings", label: "Settings", icon: Settings },
-              { id: "help", label: "Help and feedback", icon: HelpCircle },
-              { id: "storage", label: "Storage", icon: Cloud }
-            ].map((item) => {
-              const IconComp = item.icon;
-              const isAct = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center justify-between px-4 py-2.5 rounded-2xl text-xs font-bold transition ${
-                    isAct ? "neo-btn-active" : "text-slate-700 hover:bg-violet-500/10 hover:text-violet-700"
-                  }`}
-                >
-                  <div className="flex items-center gap-3.5">
-                    <IconComp className={`w-4 h-4 ${isAct ? "text-white" : "text-violet-600"}`} />
-                    <span>{item.label}</span>
-                  </div>
-                  {item.count > 0 && (
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-extrabold ${
-                      isAct ? "bg-white/25 text-white" : "bg-violet-100 text-violet-700"
-                    }`}>
-                      {item.count}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-
-            {/* Tactile Daylight Neomorphic Storage Meter */}
-            <div className="px-3 pt-3 pb-2">
-              <div className="w-full h-2.5 neo-recessed rounded-full overflow-hidden mb-2">
-                <div
-                  className="h-full bg-gradient-to-r from-violet-600 via-pink-500 to-orange-400 rounded-full transition-all duration-500"
-                  style={{ width: `${storagePercent}%` }}
-                />
-              </div>
-              <p className="text-[11px] font-bold text-slate-700 truncate">{quotaDisplayLabel}</p>
-              <p className="text-[10px] font-medium text-slate-500 mb-3">{summary.total_storage_kb} KB active</p>
-              <MagneticButton
-                onClick={() => setCloudModalOpen(true)}
-                className="w-full py-2 rounded-2xl neo-btn text-xs font-extrabold text-violet-700 hover:text-pink-600"
-              >
-                {summary.cloud_linked ? "Manage Gmail Drive" : "Link My Gmail Drive"}
-              </MagneticButton>
-            </div>
-          </nav>
         </div>
 
-        <div className="mt-3 flex items-center justify-between p-2.5 rounded-2xl neo-recessed">
-          <div className="flex items-center gap-2.5 overflow-hidden">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-violet-600 via-fuchsia-500 to-orange-400 text-white flex items-center justify-center font-extrabold text-xs shrink-0 shadow-sm">
-              {currentUser.name ? currentUser.name[0] : "U"}
-            </div>
-            <div className="overflow-hidden">
-              <p className="text-xs font-extrabold text-slate-900 truncate">{currentUser.name}</p>
-              <p className="text-[10px] font-medium text-slate-500 truncate">{currentUser.email}</p>
-            </div>
-          </div>
-          <button onClick={handleSignOut} title="Sign Out" className="text-slate-500 hover:text-rose-600 p-1.5">
+        {/* Center Neon Search Bar */}
+        <div className="relative flex-1 max-w-md">
+          <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-[#CCFF00]" />
+          <input
+            type="text"
+            placeholder="Search files, folders, or Gemini summaries..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full rounded-2xl graffiti-input pl-11 pr-4 py-2 text-xs font-bold text-white placeholder-slate-400 focus:outline-none"
+          />
+        </div>
+
+        {/* Right Action Stickers */}
+        <div className="flex items-center gap-2.5">
+          {summary.cloud_linked ? (
+            <MagneticButton
+              onClick={handleSyncCloudDrive}
+              disabled={isSyncingCloud}
+              className="px-3.5 py-2 rounded-2xl bg-[#00F0FF] text-black text-xs font-extrabold uppercase flex items-center gap-1.5"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? "animate-spin" : ""}`} />
+              <span>{isSyncingCloud ? "Syncing..." : "Sync Drive"}</span>
+            </MagneticButton>
+          ) : (
+            <MagneticButton
+              onClick={() => setCloudModalOpen(true)}
+              className="px-3.5 py-2 rounded-2xl bg-[#FFBE0B] text-black text-xs font-extrabold uppercase flex items-center gap-1.5"
+            >
+              <Cloud className="w-3.5 h-3.5" />
+              <span>Link Gmail</span>
+            </MagneticButton>
+          )}
+
+          {summary.active_files_count > 0 && (
+            <MagneticButton
+              onClick={() => setFolderAiTarget(selectedFolder)}
+              className="px-3.5 py-2 rounded-2xl bg-[#8338EC] text-white text-xs font-extrabold uppercase flex items-center gap-1.5"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-[#CCFF00]" />
+              <span>Folder AI</span>
+            </MagneticButton>
+          )}
+
+          <MagneticButton
+            onClick={handleCreateCustomFolder}
+            className="px-3 py-2 rounded-2xl bg-white text-black text-xs font-extrabold uppercase"
+          >
+            + Folder
+          </MagneticButton>
+
+          <MagneticButton
+            onClick={() => setUploadModalOpen(true)}
+            className="px-4 py-2 rounded-2xl bg-[#CCFF00] text-black text-xs font-extrabold uppercase flex items-center gap-1.5"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Drop Files</span>
+          </MagneticButton>
+
+          <MagneticButton
+            onClick={handleSignOut}
+            title="Sign Out"
+            className="p-2 rounded-2xl bg-[#FF007F] text-white"
+          >
             <LogOut className="w-4 h-4" />
-          </button>
+          </MagneticButton>
         </div>
-      </aside>
+      </header>
 
-      {/* 2. LENIS SMOOTH-SCROLL 3D WORKSPACE CANVAS */}
-      <main ref={mainScrollRef} className="relative z-10 flex-1 overflow-y-auto p-6">
-        <div ref={cascadeContainerRef} className="space-y-6">
-          {/* Top Command Bar */}
-          <header className="neo-glass rounded-3xl p-4 flex flex-wrap items-center justify-between gap-4">
-            <div className="relative flex-1 max-w-md">
-              <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-violet-600" />
-              <input
-                type="text"
-                placeholder="Search filenames, categories, or AI summaries..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="w-full neo-recessed rounded-2xl pl-11 pr-4 py-2.5 text-xs font-medium text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-400"
-              />
-            </div>
-
-            <div className="flex items-center gap-2.5">
-              {summary.cloud_linked && (
-                <MagneticButton
-                  onClick={handleSyncCloudDrive}
-                  disabled={isSyncingCloud}
-                  className="neo-btn px-4 py-2.5 rounded-2xl text-xs font-extrabold text-emerald-600 flex items-center gap-1.5"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? "animate-spin" : ""}`} />
-                  <span>{isSyncingCloud ? "Sorting..." : "Sync My Drive"}</span>
-                </MagneticButton>
-              )}
-
-              {summary.active_files_count > 0 && (
-                <MagneticButton
-                  onClick={() => setFolderAiTarget(selectedFolder)}
-                  className="neo-btn px-4 py-2.5 rounded-2xl text-xs font-extrabold text-violet-700 flex items-center gap-1.5"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-pink-500" />
-                  <span>Ask Folder AI</span>
-                </MagneticButton>
-              )}
-
-              <MagneticButton
-                onClick={handleCreateCustomFolder}
-                className="neo-btn px-4 py-2.5 rounded-2xl text-xs font-extrabold text-slate-700 flex items-center gap-1.5"
-              >
-                <Plus className="w-3.5 h-3.5 text-emerald-500" />
-                <span>New Folder</span>
-              </MagneticButton>
-
-              <MagneticButton
-                onClick={() => setUploadModalOpen(true)}
-                className="neo-btn-active px-5 py-2.5 rounded-2xl text-xs font-extrabold flex items-center gap-2"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Upload / Sort</span>
-              </MagneticButton>
-            </div>
-          </header>
-
+      {/* 2. LENIS SMOOTH-SCROLL 3D BENTO STAGE */}
+      <main ref={mainScrollRef} className="relative z-10 flex-1 overflow-y-auto px-4 md:px-8 pt-6 pb-28">
+        <div ref={cascadeContainerRef} className="max-w-7xl mx-auto space-y-6">
           {uploadNotice && (
-            <div className="neo-glass rounded-2xl px-4 py-3 text-xs font-bold text-violet-700 flex items-center justify-between">
+            <div className="graffiti-card-pink rounded-2xl px-5 py-3 text-xs font-extrabold text-white flex items-center justify-between">
               <span>{uploadNotice}</span>
               <button onClick={() => setUploadNotice("")}><X className="w-4 h-4" /></button>
             </div>
           )}
 
-          {/* VIEWS: FILES & FOLDERS / RECENT / OFFLINE */}
+          {/* VIEWS: VAULT LIBRARY / RECENT / OFFLINE */}
           {(activeTab === "library" || activeTab === "recent" || activeTab === "offline") && (
             <div className="space-y-6">
-              <div className="flex flex-wrap items-center justify-between gap-3">
+              {/* Hero Banner Strip */}
+              <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
-                  <h2 className="text-xl font-extrabold tracking-tight bg-gradient-to-r from-slate-900 via-violet-800 to-pink-600 bg-clip-text text-transparent">
-                    {activeTab === "library" && "3D Smart Folders & Multimodal Library"}
-                    {activeTab === "recent" && "Recent Activity Stream"}
-                    {activeTab === "offline" && "Offline Pinned Vault"}
+                  <h2 className="text-2xl md:text-3xl font-extrabold uppercase tracking-tight text-white drop-shadow-[3px_3px_0px_#000]">
+                    <DecryptedText
+                      text={
+                        activeTab === "library"
+                          ? "STREET-ART // SMART VAULT"
+                          : activeTab === "recent"
+                          ? "RECENT // DROP STREAM"
+                          : "OFFLINE // PINNED CACHE"
+                      }
+                    />
                   </h2>
-                  <p className="text-xs font-medium text-slate-500">
-                    Isolated workspace for {currentUser.email} • Hover any card for 3D perspective tilt
+                  <p className="font-mono-code text-xs text-[#CCFF00]">
+                    ACTIVE FOLDER: [{selectedFolder.toUpperCase()}] • {displayedDocs.length} ITEMS VISIBLE
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2.5">
-                  <button
+                <div className="flex items-center gap-3">
+                  <MagneticButton
                     onClick={() => setStarredOnly(!starredOnly)}
-                    className={`px-3.5 py-2 rounded-2xl text-xs font-bold flex items-center gap-1.5 ${
-                      starredOnly ? "neo-btn-active" : "neo-btn text-slate-700"
+                    className={`px-4 py-2 rounded-2xl text-xs font-extrabold uppercase flex items-center gap-1.5 ${
+                      starredOnly ? "bg-[#FFBE0B] text-black" : "bg-[#181030] text-white border-white"
                     }`}
                   >
-                    <Star className={`w-3.5 h-3.5 ${starredOnly ? "fill-white text-white" : "text-amber-500"}`} />
+                    <Star className={`w-3.5 h-3.5 ${starredOnly ? "fill-black text-black" : "text-[#FFBE0B]"}`} />
                     <span>Starred</span>
-                  </button>
+                  </MagneticButton>
 
                   <select
                     value={sortBy}
                     onChange={(e) => setSortBy(e.target.value)}
-                    className="neo-recessed rounded-2xl px-3.5 py-2 text-xs font-bold text-slate-700 focus:outline-none"
+                    className="rounded-2xl graffiti-input px-3.5 py-2 text-xs font-extrabold text-[#00F0FF] focus:outline-none"
                   >
-                    <option value="starred">Sort: Starred First</option>
-                    <option value="newest">Sort: Recent First</option>
-                    <option value="size">Sort: Size (KB)</option>
-                    <option value="name">Sort: Name (A–Z)</option>
+                    <option value="starred">SORT: STARRED</option>
+                    <option value="newest">SORT: NEWEST</option>
+                    <option value="size">SORT: SIZE (KB)</option>
+                    <option value="name">SORT: A–Z</option>
                   </select>
                 </div>
               </div>
 
+              {/* 3D Graffiti Sticker Folder Pills */}
               {activeTab === "library" && (
-                <div>
-                  <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500 mb-3">3D Smart Folders</h3>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    {folderEntries.length > 0 ? (
-                      folderEntries.map(([cat, count], idx) => {
-                        const pal = FOLDER_ACCENTS[idx % FOLDER_ACCENTS.length];
-                        return (
-                          <TiltSpotlightCard
-                            key={cat}
-                            maxTilt={12}
-                            glowColor={pal.glow}
-                            onClick={() => setSelectedFolder(selectedFolder === cat ? "All" : cat)}
-                            className={`rounded-2xl p-4 cursor-pointer gsap-3d-item ${
-                              selectedFolder === cat ? "ring-2 ring-violet-500" : ""
-                            }`}
-                          >
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2.5 overflow-hidden">
-                                <Folder className={`w-5 h-5 shrink-0 ${pal.icon}`} />
-                                <span className="text-xs font-extrabold text-slate-800 truncate">{cat}</span>
-                              </div>
-                              <div className="flex items-center gap-1 shrink-0">
-                                {count > 0 && (
-                                  <>
-                                    <button
-                                      type="button"
-                                      onClick={(e) => { e.stopPropagation(); setFolderAiTarget(cat); }}
-                                      className="p-1.5 rounded-xl neo-btn text-violet-600"
-                                      title="Synthesize Folder"
-                                    >
-                                      <Sparkles className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={(e) => handleExportFolderZip(cat, e)}
-                                      className="p-1.5 rounded-xl neo-btn text-pink-600"
-                                      title="Download ZIP"
-                                    >
-                                      <Download className="w-3.5 h-3.5" />
-                                    </button>
-                                  </>
-                                )}
-                                <span className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full border ${pal.badge}`}>
-                                  {count}
-                                </span>
-                              </div>
-                            </div>
-                          </TiltSpotlightCard>
-                        );
-                      })
-                    ) : (
-                      <p className="text-xs text-slate-500 italic col-span-4">
-                        Upload documents or sync your Gmail Drive to generate 3D Smart Folders.
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500 mb-3">
-                  Sorted Documents ({displayedDocs.length})
-                </h3>
-                {displayedDocs.length > 0 ? (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                    {displayedDocs.map((doc, idx) => {
-                      const pal = FOLDER_ACCENTS[idx % FOLDER_ACCENTS.length];
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+                  {folderEntries.length > 0 ? (
+                    folderEntries.map(([cat, count], idx) => {
+                      const sw = GRAFFITI_SWATCHES[idx % GRAFFITI_SWATCHES.length];
+                      const isSel = selectedFolder === cat;
                       return (
                         <TiltSpotlightCard
-                          key={doc.id}
-                          maxTilt={14}
-                          glowColor={pal.glow}
-                          onClick={() => setPreviewDoc(doc)}
-                          className="rounded-3xl p-4 cursor-pointer group gsap-3d-item"
+                          key={cat}
+                          maxTilt={11}
+                          variant={sw.variant}
+                          onClick={() => setSelectedFolder(isSel ? "All" : cat)}
+                          className={`rounded-3xl p-4 cursor-pointer gsap-3d-item ${
+                            isSel ? "ring-4 ring-[#CCFF00]" : ""
+                          }`}
                         >
-                          <div className="flex flex-col items-center text-center relative">
-                            <div className="w-full flex items-center justify-between mb-2">
-                              <div className="flex items-center gap-1">
-                                <button
-                                  type="button"
-                                  onClick={(e) => handleToggleStar(doc.id, e)}
-                                  className="p-1 rounded-lg hover:bg-violet-100"
-                                >
-                                  <Star className={`w-3.5 h-3.5 ${doc.is_starred ? "fill-amber-400 text-amber-500" : "text-slate-400"}`} />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => handleToggleOffline(doc.id, e)}
-                                  className="p-1 rounded-lg hover:bg-emerald-100"
-                                >
-                                  <CheckCircle2 className={`w-3.5 h-3.5 ${doc.is_offline ? "text-emerald-600" : "text-slate-400"}`} />
-                                </button>
-                              </div>
-                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
-                                <button
-                                  type="button"
-                                  onClick={(e) => handleShareDocument(doc.id, e)}
-                                  className="p-1.5 rounded-xl neo-btn text-violet-600"
-                                >
-                                  <Share2 className="w-3 h-3" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => { e.stopPropagation(); handleDeleteSingle(doc.id, doc.filename, false); }}
-                                  className="p-1.5 rounded-xl neo-btn text-rose-600"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
-                              </div>
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2.5 overflow-hidden">
+                              <span className={`p-2 rounded-xl border-2 border-black ${sw.bg} ${sw.text}`}>
+                                <Folder className="w-4 h-4" />
+                              </span>
+                              <span className="text-xs font-extrabold uppercase tracking-wide text-white truncate">
+                                {cat}
+                              </span>
                             </div>
 
-                            <div className="w-14 h-14 rounded-2xl neo-recessed flex items-center justify-center mb-3">
-                              {getFileIcon(doc.filename)}
+                            <div className="flex items-center gap-1 shrink-0">
+                              {count > 0 && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); setFolderAiTarget(cat); }}
+                                    className="p-1.5 rounded-xl bg-[#8338EC] text-white border border-black"
+                                    title="Folder AI"
+                                  >
+                                    <Sparkles className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => handleExportFolderZip(cat, e)}
+                                    className="p-1.5 rounded-xl bg-[#00F0FF] text-black border border-black"
+                                    title="Export ZIP"
+                                  >
+                                    <Download className="w-3 h-3" />
+                                  </button>
+                                </>
+                              )}
+                              <span className={`font-mono-code text-xs font-extrabold px-2.5 py-0.5 rounded-lg border-2 border-black ${sw.bg} ${sw.text}`}>
+                                {count}
+                              </span>
                             </div>
-                            <p className="text-xs font-extrabold text-slate-900 w-full truncate mb-1" title={doc.filename}>
-                              {doc.filename}
-                            </p>
-                            <span className="text-[10px] text-violet-700 font-bold mb-1">
-                              {doc.category} • {doc.size_kb} KB
-                            </span>
-                            <span className="text-[9px] px-2.5 py-0.5 rounded-full neo-recessed text-slate-600 font-semibold mb-1.5 truncate max-w-full">
-                              {doc.storage_source}
-                            </span>
-                            {doc.summary && (
-                              <p className="text-[10px] text-slate-600 line-clamp-2 leading-relaxed">
-                                {doc.summary}
-                              </p>
-                            )}
                           </div>
                         </TiltSpotlightCard>
                       );
-                    })}
-                  </div>
-                ) : (
-                  <div className="neo-glass rounded-3xl p-12 text-center">
-                    <UploadCloud className="w-10 h-10 text-violet-500 mx-auto mb-3" />
-                    <p className="text-sm text-slate-700 font-bold">No documents in this view yet.</p>
-                  </div>
-                )}
-              </div>
+                    })
+                  ) : (
+                    <div className="col-span-4 p-6 rounded-3xl graffiti-card text-center font-mono-code text-xs text-[#CCFF00]">
+                      NO FOLDERS YET — CLICK &quot;DROP FILES&quot; OR &quot;+ FOLDER&quot; TO TAG YOUR VAULT!
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 3D Graffiti Bento Document Cards */}
+              {displayedDocs.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
+                  {displayedDocs.map((doc, idx) => {
+                    const sw = GRAFFITI_SWATCHES[idx % GRAFFITI_SWATCHES.length];
+                    return (
+                      <TiltSpotlightCard
+                        key={doc.id}
+                        maxTilt={12}
+                        variant={sw.variant}
+                        onClick={() => setPreviewDoc(doc)}
+                        className="rounded-3xl p-5 cursor-pointer group gsap-3d-item"
+                      >
+                        <div className="flex flex-col justify-between h-full space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className={`px-2.5 py-0.5 rounded-lg border-2 border-black font-mono-code text-[10px] font-extrabold uppercase ${sw.bg} ${sw.text}`}>
+                              {doc.category}
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={(e) => handleToggleStar(doc.id, e)}
+                                className="p-1.5 rounded-lg bg-black/50 hover:bg-black"
+                              >
+                                <Star className={`w-3.5 h-3.5 ${doc.is_starred ? "fill-[#FFBE0B] text-[#FFBE0B]" : "text-slate-400"}`} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => handleToggleOffline(doc.id, e)}
+                                className="p-1.5 rounded-lg bg-black/50 hover:bg-black"
+                              >
+                                <CheckCircle2 className={`w-3.5 h-3.5 ${doc.is_offline ? "text-[#CCFF00]" : "text-slate-500"}`} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => handleShareDocument(doc.id, e)}
+                                className="p-1.5 rounded-lg bg-black/50 hover:bg-[#00F0FF] hover:text-black"
+                              >
+                                <Share2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); handleDeleteSingle(doc.id, doc.filename, false); }}
+                                className="p-1.5 rounded-lg bg-black/50 hover:bg-[#FF007F]"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-3 pt-1">
+                            <div className="w-12 h-12 rounded-2xl bg-black/70 border-2 border-white/30 flex items-center justify-center shrink-0">
+                              {getFileIcon(doc.filename)}
+                            </div>
+                            <div className="overflow-hidden">
+                              <p className="text-sm font-extrabold text-white truncate" title={doc.filename}>
+                                {doc.filename}
+                              </p>
+                              <p className="font-mono-code text-[10px] text-[#00F0FF]">
+                                {doc.size_kb} KB • {doc.storage_source}
+                              </p>
+                            </div>
+                          </div>
+
+                          {doc.summary && (
+                            <p className="text-xs text-slate-300 line-clamp-2 bg-black/50 p-2.5 rounded-xl border border-white/10">
+                              {doc.summary}
+                            </p>
+                          )}
+                        </div>
+                      </TiltSpotlightCard>
+                    );
+                  })}
+                </div>
+              ) : (
+                <TiltSpotlightCard variant="pink" className="rounded-3xl p-12 text-center gsap-3d-item">
+                  <UploadCloud className="w-12 h-12 text-[#CCFF00] mx-auto mb-3" />
+                  <p className="text-lg font-extrabold uppercase">VAULT SECTOR EMPTY</p>
+                  <p className="font-mono-code text-xs text-slate-300 mt-1">
+                    Click &quot;DROP FILES&quot; in the top HUD to unleash Gemini 2.5 Flash sorting!
+                  </p>
+                </TiltSpotlightCard>
+              )}
             </div>
           )}
 
-          {/* VIEW: UPLOADS / BIN / SPAM TABLES */}
+          {/* VIEWS: UPLOADS / BIN / SPAM */}
           {(activeTab === "uploads" || activeTab === "bin" || activeTab === "spam") && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h2 className="text-xl font-extrabold text-slate-900">
-                  {activeTab === "uploads" && "Uploads & Personal Gmail Drive Sync"}
-                  {activeTab === "bin" && "Recoverable Bin"}
-                  {activeTab === "spam" && "SHA-256 Duplicate & Spam Quarantine"}
+                <h2 className="text-2xl font-extrabold uppercase">
+                  <DecryptedText
+                    text={
+                      activeTab === "uploads"
+                        ? "UPLOADS & DRIVE SYNC QUEUE"
+                        : activeTab === "bin"
+                        ? "RECOVERABLE BIN"
+                        : "SHA-256 SPAM QUARANTINE"
+                    }
+                  />
                 </h2>
                 {activeTab === "bin" && documents.length > 0 && (
                   <MagneticButton
                     onClick={handleHardDeleteAll}
-                    className="neo-btn px-4 py-2 rounded-2xl text-xs font-bold text-rose-600"
+                    className="px-4 py-2 rounded-2xl bg-[#FF007F] text-white text-xs font-extrabold uppercase"
                   >
-                    Empty Bin Forever
+                    Wipe Bin Forever
                   </MagneticButton>
                 )}
               </div>
 
-              <div className="neo-glass rounded-3xl overflow-hidden gsap-3d-item">
+              <div className="graffiti-card rounded-3xl overflow-hidden gsap-3d-item">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-violet-50/70 text-slate-600 uppercase text-[10px] font-extrabold border-b border-slate-200">
+                  <thead className="bg-black/80 text-[#CCFF00] font-mono-code uppercase text-[11px] border-b-2 border-white">
                     <tr>
-                      <th className="py-3.5 px-4">Filename & AI Summary</th>
-                      <th className="py-3.5 px-4">Folder</th>
-                      <th className="py-3.5 px-4">Size / SHA-256</th>
-                      <th className="py-3.5 px-4 text-right">Actions</th>
+                      <th className="py-4 px-4">File & Summary</th>
+                      <th className="py-4 px-4">Folder Override</th>
+                      <th className="py-4 px-4">Footprint / Hash</th>
+                      <th className="py-4 px-4 text-right">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-200/60">
+                  <tbody className="divide-y divide-white/15 font-bold">
                     {documents.length > 0 ? (
                       documents.map((d) => (
-                        <tr key={d.id} className="hover:bg-violet-50/40">
+                        <tr key={d.id} className="hover:bg-white/5">
                           <td className="py-3.5 px-4 max-w-xs">
-                            <p className="font-extrabold text-slate-900 truncate">{d.filename}</p>
-                            <p className="text-[11px] text-slate-600 truncate">{d.summary}</p>
+                            <p className="font-extrabold text-white truncate">{d.filename}</p>
+                            <p className="text-[11px] text-slate-300 truncate">{d.summary}</p>
                           </td>
                           <td className="py-3.5 px-4">
                             <select
                               value={d.category}
                               onChange={(e) => handleCategoryChange(d.id, e.target.value)}
-                              className="neo-recessed rounded-xl px-2.5 py-1.5 text-xs font-bold text-violet-700"
+                              className="rounded-xl graffiti-input px-2.5 py-1.5 text-xs font-extrabold text-[#CCFF00]"
                             >
                               {allCategoryOptions.map((cOpt) => (
                                 <option key={cOpt} value={cOpt}>{cOpt}</option>
@@ -1805,36 +1850,36 @@ export default function App() {
                               <option value="__NEW_CUSTOM__">+ Custom Folder...</option>
                             </select>
                           </td>
-                          <td className="py-3.5 px-4 font-mono text-[11px] text-slate-700">
-                            {d.size_kb} KB {d.file_hash && <span className="text-slate-400">• #{d.file_hash}</span>}
+                          <td className="py-3.5 px-4 font-mono-code text-[11px] text-[#00F0FF]">
+                            {d.size_kb} KB {d.file_hash && <span>• #{d.file_hash}</span>}
                           </td>
                           <td className="py-3.5 px-4 text-right space-x-2">
                             {activeTab === "bin" ? (
                               <>
-                                <button onClick={() => handleRestoreSingle(d.id)} className="neo-btn px-3 py-1 rounded-xl text-emerald-600 font-bold">
+                                <MagneticButton onClick={() => handleRestoreSingle(d.id)} className="px-3 py-1 rounded-xl bg-[#CCFF00] text-black font-extrabold">
                                   Restore
-                                </button>
-                                <button onClick={() => handleDeleteSingle(d.id, d.filename, true)} className="neo-btn px-3 py-1 rounded-xl text-rose-600 font-bold">
+                                </MagneticButton>
+                                <MagneticButton onClick={() => handleDeleteSingle(d.id, d.filename, true)} className="px-3 py-1 rounded-xl bg-[#FF007F] text-white font-extrabold">
                                   Purge
-                                </button>
+                                </MagneticButton>
                               </>
                             ) : activeTab === "spam" ? (
                               <>
-                                <button onClick={() => handleToggleSpam(d.id)} className="neo-btn px-3 py-1 rounded-xl text-violet-600 font-bold">
-                                  Not Spam
-                                </button>
-                                <button onClick={() => handleDeleteSingle(d.id, d.filename, true)} className="neo-btn px-3 py-1 rounded-xl text-rose-600 font-bold">
+                                <MagneticButton onClick={() => handleToggleSpam(d.id)} className="px-3 py-1 rounded-xl bg-[#00F0FF] text-black font-extrabold">
+                                  Restore
+                                </MagneticButton>
+                                <MagneticButton onClick={() => handleDeleteSingle(d.id, d.filename, true)} className="px-3 py-1 rounded-xl bg-[#FF007F] text-white font-extrabold">
                                   Purge
-                                </button>
+                                </MagneticButton>
                               </>
                             ) : (
                               <>
-                                <button onClick={() => setPreviewDoc(d)} className="neo-btn p-1.5 rounded-xl text-violet-600">
+                                <MagneticButton onClick={() => setPreviewDoc(d)} className="p-1.5 rounded-xl bg-[#00F0FF] text-black">
                                   <Eye className="w-3.5 h-3.5" />
-                                </button>
-                                <button onClick={() => handleToggleSpam(d.id)} className="neo-btn p-1.5 rounded-xl text-orange-500">
+                                </MagneticButton>
+                                <MagneticButton onClick={() => handleToggleSpam(d.id)} className="p-1.5 rounded-xl bg-[#FFBE0B] text-black">
                                   <AlertOctagon className="w-3.5 h-3.5" />
-                                </button>
+                                </MagneticButton>
                               </>
                             )}
                           </td>
@@ -1842,7 +1887,9 @@ export default function App() {
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={4} className="py-10 text-center text-slate-500 italic">No files in this section.</td>
+                        <td colSpan={4} className="py-10 text-center font-mono-code text-slate-400">
+                          NO RECORDS IN THIS SECTOR.
+                        </td>
                       </tr>
                     )}
                   </tbody>
@@ -1851,55 +1898,57 @@ export default function App() {
             </div>
           )}
 
-          {/* VIEW: STORAGE & IDENTITY-BOUND GMAIL BRIDGE */}
+          {/* VIEW: CLOUD BRIDGE & MAINTENANCE SUBSCRIPTIONS */}
           {activeTab === "storage" && (
             <div className="space-y-6">
-              <TiltSpotlightCard maxTilt={5} className="rounded-3xl p-6 gsap-3d-item">
+              <TiltSpotlightCard variant="cyan" maxTilt={5} className="rounded-3xl p-6 gsap-3d-item">
                 <div className="flex flex-wrap items-center justify-between gap-4">
                   <div className="space-y-2">
-                    <div className="flex items-center gap-2.5">
-                      <Cloud className="w-6 h-6 text-violet-600" />
-                      <h3 className="text-lg font-extrabold text-slate-900">
-                        {summary.cloud_linked
-                          ? `${summary.cloud_provider} Bound to ${currentUser.email}`
-                          : `Isolated 100 MB Free Quota (${currentUser.email})`}
-                      </h3>
-                      <span className="px-3 py-0.5 rounded-full text-xs font-extrabold bg-violet-100 text-violet-700">
-                        {summary.subscription_plan}
-                      </span>
+                    <span className="px-3 py-1 rounded-lg bg-[#00F0FF] text-black font-mono-code text-xs font-extrabold border-2 border-black">
+                      1-TO-1 GMAIL IDENTITY LOCK ACTIVE
+                    </span>
+                    <h3 className="text-2xl font-extrabold uppercase mt-2">
+                      {summary.cloud_linked
+                        ? `${summary.cloud_provider} BOUND TO ${currentUser.email}`
+                        : `ISOLATED 100 MB SANDBOX (${currentUser.email})`}
+                    </h3>
+                    <div className="w-full max-w-md h-4 rounded-full bg-black border-2 border-white overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-[#CCFF00] via-[#00F0FF] to-[#FF007F]"
+                        style={{ width: `${storagePercent}%` }}
+                      />
                     </div>
-                    <p className="text-xs font-medium text-slate-600">
-                      Strict 1-to-1 Gmail Security Lock: Only <strong>{currentUser.email}</strong> can be linked to this workspace.
-                    </p>
+                    <p className="font-mono-code text-xs text-[#CCFF00]">{quotaDisplayLabel}</p>
                   </div>
                   {summary.cloud_linked && (
-                    <MagneticButton onClick={handleUnlinkCloudDrive} className="neo-btn px-4 py-2 rounded-2xl text-xs font-bold text-rose-600">
+                    <MagneticButton onClick={handleUnlinkCloudDrive} className="px-4 py-2.5 rounded-2xl bg-[#FF007F] text-white text-xs font-extrabold uppercase">
                       Unlink Drive
                     </MagneticButton>
                   )}
                 </div>
               </TiltSpotlightCard>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {[
-                  { name: "Free", price: "Free (100 MB)", desc: "Isolated 100 MB local quota", perks: ["100 MB isolated storage", "Gemini Flash sorting", "SHA-256 duplicate filter"] },
-                  { name: "Cloud Bridge Pro", price: "₹199 / month", desc: "Bind Your Login Gmail Drive", perks: ["Strictly binds " + currentUser.email, "Auto-sorts files in your Drive", "SQLite WAL index maintenance"] },
-                  { name: "Enterprise Auto-Sort", price: "₹499 / month", desc: "High-Rate Multimodal AI Bridge", perks: ["1-to-1 cryptographic Drive lock", "Priority Gemini 2.5 synthesis", "Dedicated audit & backup SLA"] }
+                  { name: "Free", price: "FREE // 100 MB", bg: "bg-[#00F0FF]", variant: "cyan", perks: ["100 MB Isolated Quota", "Gemini Flash Sorting", "SHA-256 Spam Filter"] },
+                  { name: "Cloud Bridge Pro", price: "₹199 // MONTH", bg: "bg-[#CCFF00]", variant: "lime", perks: ["Binds " + currentUser.email, "Auto-Sorts Your Google Drive", "SQLite WAL Maintenance"] },
+                  { name: "Enterprise Auto-Sort", price: "₹499 // MONTH", bg: "bg-[#FF007F]", variant: "pink", perks: ["1-to-1 Cryptographic Lock", "High-Rate Gemini Synthesis", "Priority Creator SLA"] }
                 ].map((tier) => (
-                  <TiltSpotlightCard key={tier.name} maxTilt={9} className="rounded-3xl p-6 flex flex-col justify-between gsap-3d-item">
+                  <TiltSpotlightCard key={tier.name} variant={tier.variant} maxTilt={9} className="rounded-3xl p-6 flex flex-col justify-between gsap-3d-item">
                     <div>
-                      <p className="text-xs font-extrabold uppercase text-pink-600">{tier.name}</p>
-                      <h4 className="text-2xl font-extrabold text-slate-900 mt-1">{tier.price}</h4>
-                      <p className="text-xs font-medium text-slate-500 mt-1">{tier.desc}</p>
-                      <ul className="mt-4 space-y-2 text-xs font-semibold text-slate-700">
-                        {tier.perks.map((p, i) => <li key={i}>✓ {p}</li>)}
+                      <span className={`px-3 py-1 rounded-lg border-2 border-black font-mono-code text-xs font-extrabold text-black ${tier.bg}`}>
+                        {tier.name.toUpperCase()}
+                      </span>
+                      <h4 className="text-3xl font-extrabold text-white mt-4">{tier.price}</h4>
+                      <ul className="mt-4 space-y-2 text-xs font-bold text-slate-200">
+                        {tier.perks.map((p, i) => <li key={i}>★ {p}</li>)}
                       </ul>
                     </div>
                     <MagneticButton
                       onClick={() => handleActivateSubscription(tier.name)}
-                      className="mt-6 w-full py-2.5 rounded-2xl neo-btn-active text-xs font-extrabold"
+                      className={`mt-6 w-full py-3 rounded-2xl text-xs font-extrabold uppercase text-black ${tier.bg}`}
                     >
-                      {summary.subscription_plan === tier.name ? "✓ Active Plan" : `Select ${tier.name}`}
+                      {summary.subscription_plan === tier.name ? "✓ ACTIVE PASS" : `ACTIVATE ${tier.name}`}
                     </MagneticButton>
                   </TiltSpotlightCard>
                 ))}
@@ -1909,33 +1958,33 @@ export default function App() {
 
           {/* VIEW: SETTINGS */}
           {activeTab === "settings" && (
-            <TiltSpotlightCard maxTilt={5} className="rounded-3xl p-6 max-w-2xl space-y-4 gsap-3d-item">
-              <h2 className="text-lg font-extrabold text-slate-900">Settings & Identity Security</h2>
-              <div className="neo-recessed p-4 rounded-2xl flex justify-between items-center text-xs font-semibold">
-                <span>Strict 1-to-1 Login Gmail Binding ({currentUser.email})</span>
-                <span className="text-emerald-600 font-extrabold">🔒 Enforced</span>
+            <TiltSpotlightCard variant="lime" maxTilt={5} className="rounded-3xl p-6 max-w-2xl space-y-4 gsap-3d-item">
+              <h2 className="text-xl font-extrabold uppercase text-[#CCFF00]">Vault Rules & Security Lock</h2>
+              <div className="p-4 rounded-2xl bg-black/70 border-2 border-white/30 flex justify-between items-center text-xs font-bold">
+                <span>1-to-1 Gmail Drive Binding ({currentUser.email})</span>
+                <span className="px-2.5 py-1 rounded bg-[#CCFF00] text-black font-mono-code font-extrabold">LOCKED</span>
               </div>
-              <div className="neo-recessed p-4 rounded-2xl flex justify-between items-center text-xs font-semibold">
+              <div className="p-4 rounded-2xl bg-black/70 border-2 border-white/30 flex justify-between items-center text-xs font-bold">
                 <span>Auto-Sort Linked Drive by Extension & Gemini AI</span>
-                <input type="checkbox" checked={autoSortExt} onChange={(e) => setAutoSortExt(e.target.checked)} className="w-4 h-4 accent-violet-600" />
+                <input type="checkbox" checked={autoSortExt} onChange={(e) => setAutoSortExt(e.target.checked)} className="w-5 h-5 accent-[#CCFF00]" />
               </div>
-              <div className="neo-recessed p-4 rounded-2xl flex justify-between items-center text-xs font-semibold">
-                <span>Generate 1-Line AI Summaries on Upload</span>
-                <input type="checkbox" checked={aiDeepSummary} onChange={(e) => setAiDeepSummary(e.target.checked)} className="w-4 h-4 accent-pink-600" />
+              <div className="p-4 rounded-2xl bg-black/70 border-2 border-white/30 flex justify-between items-center text-xs font-bold">
+                <span>Generate 1-Line AI Summaries on Drop</span>
+                <input type="checkbox" checked={aiDeepSummary} onChange={(e) => setAiDeepSummary(e.target.checked)} className="w-5 h-5 accent-[#FF007F]" />
               </div>
             </TiltSpotlightCard>
           )}
 
-          {/* VIEW: HELP & FEEDBACK */}
+          {/* VIEW: SUPPORT & FEEDBACK */}
           {activeTab === "help" && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <TiltSpotlightCard maxTilt={6} className="rounded-3xl p-6 space-y-4 gsap-3d-item">
-                <h3 className="text-base font-extrabold text-slate-900">Submit Issue to Project Creator</h3>
+              <TiltSpotlightCard variant="pink" maxTilt={6} className="rounded-3xl p-6 space-y-4 gsap-3d-item">
+                <h3 className="text-lg font-extrabold uppercase text-[#FF007F]">Ping Creator Support Desk</h3>
                 <form onSubmit={handleSubmitFeedback} className="space-y-3">
                   <select
                     value={fbCategory}
                     onChange={(e) => setFbCategory(e.target.value)}
-                    className="w-full rounded-2xl neo-recessed px-3.5 py-2.5 text-xs font-bold text-slate-800"
+                    className="w-full rounded-2xl graffiti-input px-3.5 py-2.5 text-xs font-extrabold text-[#CCFF00]"
                   >
                     <option value="Cloud Drive Sync">Cloud Drive Sync</option>
                     <option value="Subscription & Billing">Subscription & Billing</option>
@@ -1947,28 +1996,30 @@ export default function App() {
                     required
                     value={fbMessage}
                     onChange={(e) => setFbMessage(e.target.value)}
-                    placeholder="Describe your issue or request..."
-                    className="w-full rounded-2xl neo-recessed p-3.5 text-xs font-medium text-slate-900 focus:outline-none"
+                    placeholder="Drop your issue or feature request..."
+                    className="w-full rounded-2xl graffiti-input p-3.5 text-xs font-bold text-white focus:outline-none"
                   />
-                  <MagneticButton type="submit" className="neo-btn-active px-5 py-2.5 rounded-2xl text-xs font-extrabold">
-                    Send to Creator Support Desk
+                  <MagneticButton type="submit" className="px-5 py-3 rounded-2xl bg-[#CCFF00] text-black text-xs font-extrabold uppercase">
+                    Transmit Ticket →
                   </MagneticButton>
                 </form>
               </TiltSpotlightCard>
 
-              <TiltSpotlightCard maxTilt={6} className="rounded-3xl p-6 space-y-3 gsap-3d-item">
-                <h3 className="text-base font-extrabold text-slate-900">My Tickets & Creator Replies ({feedbackList.length})</h3>
+              <TiltSpotlightCard variant="cyan" maxTilt={6} className="rounded-3xl p-6 space-y-3 gsap-3d-item">
+                <h3 className="text-lg font-extrabold uppercase text-[#00F0FF]">
+                  My Tickets & Creator Replies ({feedbackList.length})
+                </h3>
                 <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
                   {feedbackList.map((fb) => (
-                    <div key={fb.id} className="neo-recessed p-3.5 rounded-2xl text-xs space-y-1.5">
-                      <div className="flex justify-between font-extrabold text-violet-700">
+                    <div key={fb.id} className="p-3.5 rounded-2xl bg-black/70 border-2 border-white/25 text-xs space-y-1.5">
+                      <div className="flex justify-between font-mono-code font-extrabold text-[#CCFF00]">
                         <span>#{fb.id} • {fb.category}</span>
                         <span>{fb.status || "Open"}</span>
                       </div>
-                      <p className="text-slate-800 font-medium">{fb.message}</p>
+                      <p className="text-white font-bold">{fb.message}</p>
                       {fb.admin_reply && (
-                        <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800">
-                          <strong>Creator Reply:</strong> {fb.admin_reply}
+                        <div className="p-2.5 rounded-xl bg-[#00F0FF]/20 border border-[#00F0FF] text-[#00F0FF] font-bold">
+                          <strong>CREATOR REPLY:</strong> {fb.admin_reply}
                         </div>
                       )}
                     </div>
@@ -1980,25 +2031,32 @@ export default function App() {
         </div>
       </main>
 
+      {/* 3. REACT BITS FLOATING BOTTOM 3D DOCK */}
+      <FloatingGraffitiDock
+        items={userDockItems}
+        activeId={activeTab}
+        onSelect={(id) => setActiveTab(id)}
+      />
+
       {/* MODAL: IDENTITY-LOCKED CLOUD DRIVE LINK */}
       {cloudModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <TiltSpotlightCard maxTilt={5} className="rounded-3xl w-full max-w-md p-6 relative">
-            <button onClick={() => setCloudModalOpen(false)} className="absolute right-5 top-5 text-slate-500 hover:text-slate-900">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <TiltSpotlightCard variant="cyan" maxTilt={5} className="rounded-3xl w-full max-w-md p-6 relative">
+            <button onClick={() => setCloudModalOpen(false)} className="absolute right-5 top-5 text-white">
               <X className="w-5 h-5" />
             </button>
-            <h3 className="text-base font-extrabold text-slate-900 mb-2">Identity-Locked Gmail Drive Bridge</h3>
-            <p className="text-xs font-medium text-slate-600 mb-4">
-              Only the Google Drive matching your login Gmail ({currentUser.email}) can be linked.
+            <h3 className="text-lg font-extrabold uppercase text-[#00F0FF] mb-2">1-to-1 Gmail Drive Lock</h3>
+            <p className="text-xs font-bold text-slate-300 mb-4">
+              Only the Google Drive owned by your login Gmail ({currentUser.email}) can be bound.
             </p>
             {summary.subscription_plan === "Free" ? (
-              <div className="neo-recessed p-4 rounded-2xl space-y-3">
-                <p className="text-xs text-pink-600 font-extrabold">🔒 Maintenance Subscription Required</p>
+              <div className="p-4 rounded-2xl bg-black/80 border-2 border-[#FF007F] space-y-3">
+                <p className="text-xs text-[#FF007F] font-extrabold uppercase">🔒 Maintenance Pass Required</p>
                 <MagneticButton
                   onClick={() => handleActivateSubscription("Cloud Bridge Pro")}
-                  className="w-full py-2.5 rounded-2xl neo-btn-active text-xs font-extrabold"
+                  className="w-full py-3 rounded-2xl bg-[#CCFF00] text-black text-xs font-extrabold uppercase"
                 >
-                  Activate Cloud Bridge Pro (₹199/mo) →
+                  Unlock Cloud Bridge Pro (₹199/mo) →
                 </MagneticButton>
               </div>
             ) : (
@@ -2006,7 +2064,7 @@ export default function App() {
                 <select
                   value={cloudProviderInput}
                   onChange={(e) => setCloudProviderInput(e.target.value)}
-                  className="w-full rounded-2xl neo-recessed px-3.5 py-2.5 text-xs font-bold text-slate-800"
+                  className="w-full rounded-2xl graffiti-input px-3.5 py-2.5 text-xs font-extrabold text-white"
                 >
                   <option value="Google Drive">Google Drive (Gmail Bound)</option>
                   <option value="OneDrive">Microsoft OneDrive (Email Bound)</option>
@@ -2016,10 +2074,10 @@ export default function App() {
                   readOnly
                   disabled
                   value={currentUser.email}
-                  className="w-full rounded-2xl neo-recessed px-3.5 py-2.5 text-xs text-emerald-700 font-mono font-bold cursor-not-allowed"
+                  className="w-full rounded-2xl graffiti-input px-3.5 py-2.5 text-xs text-[#CCFF00] font-mono-code font-extrabold cursor-not-allowed"
                 />
-                <MagneticButton type="submit" className="w-full py-2.5 rounded-2xl neo-btn-active text-xs font-extrabold">
-                  Verify Identity & Connect My Drive
+                <MagneticButton type="submit" className="w-full py-3 rounded-2xl bg-[#00F0FF] text-black text-xs font-extrabold uppercase">
+                  Verify Identity & Bind Drive
                 </MagneticButton>
               </form>
             )}
@@ -2029,28 +2087,28 @@ export default function App() {
 
       {/* MODAL: UPLOAD FILES */}
       {uploadModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <TiltSpotlightCard maxTilt={5} className="rounded-3xl w-full max-w-md p-6 relative">
-            <button onClick={() => setUploadModalOpen(false)} className="absolute right-5 top-5 text-slate-500 hover:text-slate-900">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <TiltSpotlightCard variant="lime" maxTilt={5} className="rounded-3xl w-full max-w-md p-6 relative">
+            <button onClick={() => setUploadModalOpen(false)} className="absolute right-5 top-5 text-white">
               <X className="w-5 h-5" />
             </button>
-            <h3 className="text-base font-extrabold text-slate-900 mb-1">Upload & Sort Files</h3>
-            <p className="text-xs font-medium text-slate-600 mb-4">{quotaDisplayLabel}</p>
+            <h3 className="text-lg font-extrabold uppercase text-[#CCFF00] mb-1">Drop Files Into Vault</h3>
+            <p className="font-mono-code text-xs text-[#00F0FF] mb-4">{quotaDisplayLabel}</p>
             <form onSubmit={handleUploadSubmit} className="space-y-4">
-              <div className="neo-recessed rounded-2xl p-6 text-center">
+              <div className="rounded-2xl graffiti-input p-6 text-center">
                 <input
                   type="file"
                   multiple
                   onChange={(e) => setSelectedFiles(Array.from(e.target.files))}
-                  className="w-full text-xs text-slate-700 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-extrabold file:bg-violet-600 file:text-white cursor-pointer"
+                  className="w-full text-xs text-white file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-2 file:border-black file:text-xs file:font-extrabold file:bg-[#CCFF00] file:text-black cursor-pointer"
                 />
               </div>
               <MagneticButton
                 type="submit"
                 disabled={isUploading || selectedFiles.length === 0}
-                className="w-full py-2.5 rounded-2xl neo-btn-active text-xs font-extrabold"
+                className="w-full py-3 rounded-2xl bg-[#FF007F] text-white text-xs font-extrabold uppercase"
               >
-                {isUploading ? "Sorting & Indexing..." : `Sort ${selectedFiles.length} File(s)`}
+                {isUploading ? "SPRAYING & SORTING..." : `SORT ${selectedFiles.length} FILE(S)`}
               </MagneticButton>
             </form>
           </TiltSpotlightCard>
@@ -2059,52 +2117,52 @@ export default function App() {
 
       {/* MODAL: SPLIT-SCREEN DOCUMENT PREVIEW + ASK GEMINI */}
       {previewDoc && (
-        <div className="fixed inset-0 bg-slate-900/45 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="neo-glass rounded-3xl w-full max-w-6xl h-[85vh] flex flex-col overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="graffiti-card rounded-3xl w-full max-w-6xl h-[85vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b-2 border-white bg-black/70">
               <div className="flex items-center gap-3 overflow-hidden">
                 {getFileIcon(previewDoc.filename)}
                 <div className="overflow-hidden">
-                  <h3 className="text-sm font-extrabold text-slate-900 truncate">{previewDoc.filename}</h3>
-                  <p className="text-[11px] text-slate-600 truncate">{previewDoc.summary}</p>
+                  <h3 className="text-sm font-extrabold text-white truncate">{previewDoc.filename}</h3>
+                  <p className="font-mono-code text-[11px] text-[#CCFF00] truncate">{previewDoc.summary}</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={() => handleDownloadFile(previewDoc.id)} className="neo-btn-active px-3.5 py-1.5 rounded-xl text-xs font-extrabold">
+                <MagneticButton onClick={() => handleDownloadFile(previewDoc.id)} className="px-3.5 py-1.5 rounded-xl bg-[#CCFF00] text-black text-xs font-extrabold">
                   Download
-                </button>
-                <button onClick={() => setPreviewDoc(null)} className="p-1.5 text-slate-500 hover:text-slate-900">
+                </MagneticButton>
+                <button onClick={() => setPreviewDoc(null)} className="p-1.5 text-white hover:text-[#FF007F]">
                   <X className="w-5 h-5" />
                 </button>
               </div>
             </div>
 
             <div className="flex-1 flex overflow-hidden">
-              <div className="flex-1 bg-slate-100 flex items-center justify-center p-4">
+              <div className="flex-1 bg-black/80 flex items-center justify-center p-4">
                 {["png", "jpg", "jpeg", "webp", "gif", "svg"].includes(previewDoc.filename.split(".").pop().toLowerCase()) ? (
-                  <img src={`${API_BASE}/documents/${previewDoc.id}/file?download=false`} alt={previewDoc.filename} className="max-h-full max-w-full object-contain rounded-xl shadow-md" />
+                  <img src={`${API_BASE}/documents/${previewDoc.id}/file?download=false`} alt={previewDoc.filename} className="max-h-full max-w-full object-contain rounded-xl border-2 border-white" />
                 ) : (
-                  <iframe title={previewDoc.filename} src={`${API_BASE}/documents/${previewDoc.id}/file?download=false`} className="w-full h-full rounded-xl bg-white shadow-sm" />
+                  <iframe title={previewDoc.filename} src={`${API_BASE}/documents/${previewDoc.id}/file?download=false`} className="w-full h-full rounded-xl bg-white border-2 border-black" />
                 )}
               </div>
 
-              <div className="w-80 md:w-96 border-l border-slate-200 flex flex-col justify-between p-4">
-                <div className="pb-3 border-b border-slate-200">
+              <div className="w-80 md:w-96 border-l-2 border-white bg-[#120b24] flex flex-col justify-between p-4">
+                <div className="pb-3 border-b border-white/20">
                   <div className="flex justify-between items-center">
-                    <span className="text-xs font-extrabold text-violet-700">✨ Ask Gemini AI</span>
-                    <button onClick={() => handleExportNotesMarkdown(previewDoc.filename, qaMessages)} className="neo-btn px-2.5 py-1 rounded-xl text-[10px] font-bold text-slate-700">
-                      💾 Save Notes
+                    <span className="font-mono-code text-xs font-extrabold text-[#CCFF00]">⚡ ASK GEMINI AI</span>
+                    <button onClick={() => handleExportNotesMarkdown(previewDoc.filename, qaMessages)} className="px-2.5 py-1 rounded-lg bg-[#00F0FF] text-black text-[10px] font-extrabold">
+                      💾 SAVE .MD
                     </button>
                   </div>
                   <div className="flex gap-1.5 mt-2">
-                    <button onClick={() => handleAskDocument("Summarize key points.")} className="neo-btn px-2.5 py-1 rounded-xl text-[10px] font-bold text-violet-700">📄 Summarize</button>
-                    <button onClick={() => handleAskDocument("Generate 3 quiz questions.")} className="neo-btn px-2.5 py-1 rounded-xl text-[10px] font-bold text-pink-600">📝 Quiz Me</button>
+                    <button onClick={() => handleAskDocument("Summarize key points.")} className="px-2.5 py-1 rounded-lg bg-[#FF007F] text-white text-[10px] font-extrabold">📄 Summarize</button>
+                    <button onClick={() => handleAskDocument("Generate 3 quiz questions.")} className="px-2.5 py-1 rounded-lg bg-[#FFBE0B] text-black text-[10px] font-extrabold">📝 Quiz Me</button>
                   </div>
                 </div>
 
                 <div className="flex-1 overflow-y-auto space-y-2.5 py-3">
                   {qaMessages.map((m, idx) => (
-                    <div key={idx} className={`p-3 rounded-2xl text-xs whitespace-pre-wrap ${m.role === "user" ? "neo-btn-active ml-6" : "neo-recessed text-slate-800 mr-2"}`}>
+                    <div key={idx} className={`p-3 rounded-2xl text-xs font-bold whitespace-pre-wrap border-2 border-black ${m.role === "user" ? "bg-[#CCFF00] text-black ml-6" : "bg-black/80 text-white border-white/30 mr-2"}`}>
                       {m.text}
                     </div>
                   ))}
@@ -2115,10 +2173,10 @@ export default function App() {
                     type="text"
                     value={qaQuestion}
                     onChange={(e) => setQaQuestion(e.target.value)}
-                    placeholder="Ask about this file..."
-                    className="flex-1 neo-recessed rounded-2xl px-3.5 py-2 text-xs text-slate-900 focus:outline-none"
+                    placeholder="Ask Gemini..."
+                    className="flex-1 rounded-2xl graffiti-input px-3.5 py-2 text-xs font-bold text-white focus:outline-none"
                   />
-                  <button type="submit" className="neo-btn-active px-4 py-2 rounded-2xl text-xs font-extrabold">Ask</button>
+                  <MagneticButton type="submit" className="px-4 py-2 rounded-2xl bg-[#CCFF00] text-black text-xs font-extrabold">Ask</MagneticButton>
                 </form>
               </div>
             </div>
@@ -2128,28 +2186,28 @@ export default function App() {
 
       {/* MODAL: ASK FOLDER AI */}
       {folderAiTarget && (
-        <div className="fixed inset-0 bg-slate-900/45 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="neo-glass rounded-3xl w-full max-w-2xl h-[75vh] flex flex-col overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
-              <h3 className="text-sm font-extrabold text-violet-700">✨ Ask Folder AI — "{folderAiTarget}"</h3>
-              <button onClick={() => setFolderAiTarget(null)}><X className="w-5 h-5 text-slate-600" /></button>
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="graffiti-card-pink rounded-3xl w-full max-w-2xl h-[75vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b-2 border-white bg-black/70">
+              <h3 className="text-sm font-extrabold uppercase text-[#CCFF00]">🔥 FOLDER SYNTHESIS // {folderAiTarget}</h3>
+              <button onClick={() => setFolderAiTarget(null)}><X className="w-5 h-5 text-white" /></button>
             </div>
             <div className="flex-1 overflow-y-auto space-y-3 p-6">
               {folderAiMessages.map((m, idx) => (
-                <div key={idx} className={`p-3.5 rounded-2xl text-xs whitespace-pre-wrap ${m.role === "user" ? "neo-btn-active ml-10" : "neo-recessed text-slate-800 mr-6"}`}>
+                <div key={idx} className={`p-3.5 rounded-2xl text-xs font-bold whitespace-pre-wrap border-2 border-black ${m.role === "user" ? "bg-[#00F0FF] text-black ml-10" : "bg-black/80 text-white border-white/30 mr-6"}`}>
                   {m.text}
                 </div>
               ))}
             </div>
-            <form onSubmit={(e) => { e.preventDefault(); handleAskFolderAi(); }} className="p-4 border-t border-slate-200 flex gap-2">
+            <form onSubmit={(e) => { e.preventDefault(); handleAskFolderAi(); }} className="p-4 border-t-2 border-white bg-black/70 flex gap-2">
               <input
                 type="text"
                 value={folderAiQuestion}
                 onChange={(e) => setFolderAiQuestion(e.target.value)}
                 placeholder={`Synthesize all files in "${folderAiTarget}"...`}
-                className="flex-1 neo-recessed rounded-2xl px-4 py-2.5 text-xs text-slate-900 focus:outline-none"
+                className="flex-1 rounded-2xl graffiti-input px-4 py-2.5 text-xs font-bold text-white focus:outline-none"
               />
-              <button type="submit" className="neo-btn-active px-4 py-2.5 rounded-2xl text-xs font-extrabold">Synthesize</button>
+              <MagneticButton type="submit" className="px-4 py-2.5 rounded-2xl bg-[#CCFF00] text-black text-xs font-extrabold uppercase">Synthesize</MagneticButton>
             </form>
           </div>
         </div>

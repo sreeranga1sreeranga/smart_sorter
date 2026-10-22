@@ -1,71 +1,110 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700;800&family=Space+Grotesk:wght@500;700&family=Syne:wght@700;800&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   body {
-    @apply bg-[#f4f5fb] text-slate-900 antialiased selection:bg-fuchsia-500/20 selection:text-fuchsia-700 overflow-hidden;
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    background-color: #0b0716;
+    color: #ffffff;
+    font-family: 'Space Grotesk', sans-serif;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  h1, h2, h3, .font-graffiti {
+    font-family: 'Syne', sans-serif;
+  }
+
+  .font-mono-code {
+    font-family: 'JetBrains Mono', monospace;
   }
 }
 
-/* Gen Z Daylight Neomorphism + Frosted Glass Card */
-.neo-glass {
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.90), rgba(246, 247, 255, 0.78));
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.95);
-  box-shadow:
-    12px 16px 34px rgba(109, 40, 217, 0.08),
-    -8px -8px 24px rgba(255, 255, 255, 0.95),
-    inset 2px 2px 4px rgba(255, 255, 255, 1),
-    inset -1px -1px 3px rgba(148, 163, 184, 0.18);
+/* Halftone Street-Art Dot Matrix Overlay */
+.bg-halftone {
+  background-image: radial-gradient(rgba(204, 255, 0, 0.14) 1.5px, transparent 1.5px),
+                    radial-gradient(rgba(255, 0, 127, 0.12) 1.5px, #0b0716 1.5px);
+  background-size: 32px 32px;
+  background-position: 0 0, 16px 16px;
 }
 
-/* Carved Pastel Neomorphic Input Well */
-.neo-recessed {
-  background: #edf0f9;
-  border: 1px solid rgba(255, 255, 255, 0.8);
-  box-shadow:
-    inset 4px 4px 8px rgba(166, 175, 204, 0.42),
-    inset -4px -4px 8px rgba(255, 255, 255, 0.95);
+/* Graffiti Neo-Brutalist + Frosted Glass Hybrid Card */
+.graffiti-card {
+  background: linear-gradient(145deg, rgba(24, 16, 48, 0.86), rgba(14, 9, 30, 0.92));
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 2.5px solid #ffffff;
+  box-shadow: 7px 7px 0px #CCFF00, 12px 12px 28px rgba(0, 0, 0, 0.75);
 }
 
-/* Tactile White Clay Pill Button */
-.neo-btn {
-  background: linear-gradient(145deg, #ffffff, #eef1fa);
-  border: 1px solid rgba(255, 255, 255, 0.95);
-  box-shadow:
-    6px 6px 14px rgba(124, 58, 237, 0.09),
-    -4px -4px 12px rgba(255, 255, 255, 0.95),
-    inset 1px 1px 2px rgba(255, 255, 255, 1);
+.graffiti-card-pink {
+  background: linear-gradient(145deg, rgba(32, 14, 46, 0.88), rgba(16, 9, 30, 0.94));
+  backdrop-filter: blur(20px);
+  border: 2.5px solid #ffffff;
+  box-shadow: 7px 7px 0px #FF007F, 12px 12px 28px rgba(0, 0, 0, 0.75);
 }
 
-.neo-btn:hover {
-  border-color: rgba(168, 85, 247, 0.35);
+.graffiti-card-cyan {
+  background: linear-gradient(145deg, rgba(14, 26, 48, 0.88), rgba(10, 14, 30, 0.94));
+  backdrop-filter: blur(20px);
+  border: 2.5px solid #ffffff;
+  box-shadow: 7px 7px 0px #00F0FF, 12px 12px 28px rgba(0, 0, 0, 0.75);
 }
 
-/* Gen Z Electric Violet -> Hyper Pink Active Button */
-.neo-btn-active {
-  background: linear-gradient(135deg, #7c3aed 0%, #db2777 55%, #f97316 100%);
-  color: #ffffff !important;
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  box-shadow:
-    0 10px 24px -4px rgba(219, 39, 119, 0.42),
-    inset 1px 1px 2px rgba(255, 255, 255, 0.45);
+/* Carved Street-Art Input Well */
+.graffiti-input {
+  background: rgba(8, 5, 18, 0.92);
+  border: 2px solid rgba(255, 255, 255, 0.75);
+  box-shadow: 4px 4px 0px rgba(0, 240, 255, 0.85);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.graffiti-input:focus {
+  border-color: #CCFF00;
+  box-shadow: 6px 6px 0px #FF007F;
+  transform: translate(-2px, -2px);
+}
+
+/* Tactile Sticker Button */
+.sticker-btn {
+  border: 2.5px solid #000000;
+  box-shadow: 5px 5px 0px #000000;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.sticker-btn:hover:not(:disabled) {
+  transform: translate(-2px, -2px);
+  box-shadow: 7px 7px 0px #000000;
+}
+
+.sticker-btn:active:not(:disabled) {
+  transform: translate(3px, 3px);
+  box-shadow: 1px 1px 0px #000000;
+}
+
+/* Infinite Marquee Animation */
+@keyframes marqueeScroll {
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(-50%); }
+}
+
+.animate-marquee {
+  display: flex;
+  width: max-content;
+  animation: marqueeScroll 22s linear infinite;
 }
 
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: rgba(237, 240, 249, 0.6);
+  background: #0b0716;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(139, 92, 246, 0.28);
+  background: #CCFF00;
+  border: 2px solid #000000;
   border-radius: 9999px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(219, 39, 119, 0.45);
 }
