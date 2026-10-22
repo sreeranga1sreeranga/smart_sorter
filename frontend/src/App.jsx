@@ -1,34 +1,39 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import axios from "axios";
 import "./index.css";
-import { 
-  Folder, 
-  FileText, 
-  Code, 
-  Image as ImageIcon, 
-  Video, 
-  Package, 
-  Search, 
-  UploadCloud, 
-  HardDrive, 
-  Clock, 
-  Plus, 
-  CheckCircle2, 
-  X, 
-  LogOut, 
-  Shield, 
-  Mail, 
-  Lock, 
-  User as UserIcon, 
-  Trash2, 
-  RotateCcw,
+import {
+  Interactive3DBackground,
+  TiltSpotlightCard,
+  MagneticButton,
+  useLenisSmoothScroll,
+  useGsap3DCascade
+} from "./components/NeoGlass3D";
+import {
+  Folder,
+  FileText,
+  Code,
+  Image as ImageIcon,
+  Video,
+  Package,
+  Search,
+  UploadCloud,
+  HardDrive,
+  Clock,
+  Plus,
+  CheckCircle2,
+  X,
+  LogOut,
+  Shield,
+  Mail,
+  Lock,
+  User as UserIcon,
+  Trash2,
   RefreshCw,
-  ArrowLeft, 
-  AlertCircle, 
+  ArrowLeft,
+  AlertCircle,
   ShieldCheck,
   Download,
   Eye,
-  ExternalLink,
   Star,
   Share2,
   Sparkles,
@@ -52,23 +57,27 @@ const STANDARD_CATEGORIES = [
   "Miscellaneous"
 ];
 
+const FOLDER_ACCENTS = [
+  { icon: "text-violet-600", badge: "bg-violet-100 text-violet-700 border-violet-200", glow: "rgba(124, 58, 237, 0.16)" },
+  { icon: "text-pink-600", badge: "bg-pink-100 text-pink-700 border-pink-200", glow: "rgba(236, 72, 153, 0.16)" },
+  { icon: "text-emerald-600", badge: "bg-emerald-100 text-emerald-700 border-emerald-200", glow: "rgba(16, 185, 129, 0.16)" },
+  { icon: "text-orange-600", badge: "bg-orange-100 text-orange-700 border-orange-200", glow: "rgba(249, 115, 22, 0.16)" },
+  { icon: "text-cyan-600", badge: "bg-cyan-100 text-cyan-700 border-cyan-200", glow: "rgba(6, 182, 212, 0.16)" }
+];
+
 const formatTimestamp = (raw) => {
   if (!raw) return "—";
   try {
     const isoString = raw.includes("T") ? raw : raw.replace(" ", "T") + "Z";
     const d = new Date(isoString);
     if (isNaN(d.getTime())) return raw;
-
     const day = d.getDate();
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    const month = months[d.getMonth()];
-    const year = d.getFullYear();
     let hours = d.getHours();
     const minutes = String(d.getMinutes()).padStart(2, "0");
     const ampm = hours >= 12 ? "PM" : "AM";
     hours = hours % 12 || 12;
-
-    return `${day} ${month} ${year}, ${hours}:${minutes} ${ampm}`;
+    return `${day} ${months[d.getMonth()]} ${d.getFullYear()}, ${hours}:${minutes} ${ampm}`;
   } catch {
     return raw;
   }
@@ -102,13 +111,12 @@ export default function App() {
   const [resetStep, setResetStep] = useState(1);
   const [otpTimer, setOtpTimer] = useState(0);
 
-  // User Portal Active Tab vs Dedicated Creator Operations Tab
+  // Navigation Tabs
   const [activeTab, setActiveTab] = useState("library");
-  const [creatorTab, setCreatorTab] = useState("telemetry"); // 'telemetry' | 'support' | 'users' | 'audit'
-  const [ticketFilter, setTicketFilter] = useState("All");   // 'All' | 'Open' | 'Resolved'
+  const [creatorTab, setCreatorTab] = useState("telemetry");
+  const [ticketFilter, setTicketFilter] = useState("All");
   const [replyInputs, setReplyInputs] = useState({});
 
-  // Per-User Summary State (Strictly for Standard Users)
   const [summary, setSummary] = useState({
     active_files_count: 0,
     bin_files_count: 0,
@@ -124,7 +132,7 @@ export default function App() {
     cloud_email: "",
     drive_binding_hash: "",
     category_counts: {},
-    category_storage_kb: {},
+    category_storage_kb: {}
   });
 
   const [documents, setDocuments] = useState([]);
@@ -143,7 +151,7 @@ export default function App() {
     spam_files: 0,
     total_storage_mb: 0,
     global_categories: [],
-    users: [],
+    users: []
   });
 
   const [search, setSearch] = useState("");
@@ -161,18 +169,15 @@ export default function App() {
   });
   const [uploadNotice, setUploadNotice] = useState("");
 
-  // Cloud Linking & Subscription States (Standard Users Only)
   const [cloudModalOpen, setCloudModalOpen] = useState(false);
   const [cloudProviderInput, setCloudProviderInput] = useState("Google Drive");
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
 
-  // Settings & Feedback States
   const [autoSortExt, setAutoSortExt] = useState(true);
   const [aiDeepSummary, setAiDeepSummary] = useState(true);
   const [fbCategory, setFbCategory] = useState("Cloud Drive Sync");
   const [fbMessage, setFbMessage] = useState("");
 
-  // Modals: Upload, Single-Doc Preview Q&A, and Folder AI Synthesis
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -186,9 +191,14 @@ export default function App() {
   const [folderAiMessages, setFolderAiMessages] = useState([]);
   const [folderAiLoading, setFolderAiLoading] = useState(false);
 
+  const mainScrollRef = useRef(null);
+  const cascadeContainerRef = useRef(null);
+
   const isCreatorAdmin = currentUser && currentUser.email?.toLowerCase() === CREATOR_EMAIL.toLowerCase();
 
-  // 3-Minute OTP Countdown Hook
+  useLenisSmoothScroll(mainScrollRef, currentUser?.id);
+  useGsap3DCascade(cascadeContainerRef, [activeTab, creatorTab, selectedFolder, documents.length, portalMode, resetStep]);
+
   useEffect(() => {
     if (portalMode !== "reset" || resetStep !== 2 || otpTimer <= 0) return;
     const timerId = setInterval(() => {
@@ -236,7 +246,6 @@ export default function App() {
   const fetchWorkspace = async () => {
     if (!currentUser) return;
 
-    // 1. If logged in as Creator Admin: Fetch ONLY Project Operations, Support Tickets, Users & Audit Logs
     if (isCreatorAdmin) {
       try {
         const [adminRes, actRes, fbRes] = await Promise.all([
@@ -253,7 +262,6 @@ export default function App() {
       return;
     }
 
-    // 2. If logged in as Standard User: Fetch User Workspace, Files & Their Support Tickets
     try {
       const sumRes = await axios.get(`${API_BASE}/workspace/summary?user_id=${currentUser.id}`);
       setSummary(sumRes.data);
@@ -291,23 +299,19 @@ export default function App() {
     setAuthError("");
     setAuthSuccess("");
     setAuthLoading(true);
-
     try {
       const emailClean = loginEmail.trim();
       if (isAdminGate && emailClean.toLowerCase() !== CREATOR_EMAIL.toLowerCase()) {
         throw new Error(`Access Denied: Only ${CREATOR_EMAIL} is allowed in the Creator Portal.`);
       }
-
       const res = await axios.post(`${API_BASE}/auth/login`, {
         email: emailClean,
-        password: loginPassword,
+        password: loginPassword
       });
-
       const userData = res.data.user;
       if (isAdminGate && userData.role !== "admin") {
         throw new Error("Access Denied: Account lacks admin permissions.");
       }
-
       setCurrentUser(userData);
       localStorage.setItem("sorter_user", JSON.stringify(userData));
       if (userData.email.toLowerCase() === CREATOR_EMAIL.toLowerCase()) {
@@ -327,12 +331,11 @@ export default function App() {
     setAuthError("");
     setAuthSuccess("");
     setAuthLoading(true);
-
     try {
       await axios.post(`${API_BASE}/auth/register`, {
         name: regName.trim(),
         email: regEmail.trim(),
-        password: regPassword,
+        password: regPassword
       });
       setAuthSuccess("Account created with 100 MB Free Quota! You can now sign in.");
       setTimeout(() => {
@@ -356,11 +359,8 @@ export default function App() {
     setAuthError("");
     setAuthSuccess("");
     setAuthLoading(true);
-
     try {
-      const res = await axios.post(`${API_BASE}/auth/request-otp`, { 
-        email: resetEmail.trim() 
-      });
+      const res = await axios.post(`${API_BASE}/auth/request-otp`, { email: resetEmail.trim() });
       setResetOtp("");
       setResetStep(2);
       setOtpTimer(180);
@@ -385,11 +385,10 @@ export default function App() {
     setAuthError("");
     setAuthSuccess("");
     setAuthLoading(true);
-
     try {
       const res = await axios.post(`${API_BASE}/auth/verify-otp`, {
         email: resetEmail.trim(),
-        otp: resetOtp.trim(),
+        otp: resetOtp.trim()
       });
       setResetStep(3);
       setAuthSuccess(res.data.message || "OTP verified! Set your new password below.");
@@ -409,12 +408,11 @@ export default function App() {
     setAuthError("");
     setAuthSuccess("");
     setAuthLoading(true);
-
     try {
       await axios.post(`${API_BASE}/auth/reset-password`, {
         email: resetEmail.trim(),
         otp: resetOtp.trim(),
-        new_password: resetNewPass,
+        new_password: resetNewPass
       });
       setAuthSuccess("Password successfully changed! Redirecting to sign in...");
       setTimeout(() => {
@@ -440,7 +438,7 @@ export default function App() {
     setLoginPassword("");
   };
 
-  // Creator Admin Operations Handlers
+  // Creator Admin Handlers
   const handleReplyTicket = async (ticketId, statusValue = "Resolved") => {
     const text = (replyInputs[ticketId] || "").trim();
     if (!text) {
@@ -465,9 +463,7 @@ export default function App() {
     const nextStatus = userObj.status === "Active" ? "Suspended" : "Active";
     if (!window.confirm(`Set account "${userObj.email}" to ${nextStatus}?`)) return;
     try {
-      await axios.put(`${API_BASE}/admin/users/${userObj.id}/status`, {
-        account_status: nextStatus
-      });
+      await axios.put(`${API_BASE}/admin/users/${userObj.id}/status`, { account_status: nextStatus });
       await fetchWorkspace();
     } catch (err) {
       alert(err.response?.data?.detail || "Could not update user status.");
@@ -546,11 +542,7 @@ export default function App() {
     if (e) e.stopPropagation();
     try {
       const res = await axios.post(`${API_BASE}/documents/${docId}/offline`);
-      setUploadNotice(
-        res.data.is_offline
-          ? "📌 File pinned for Offline access."
-          : "Removed file from Offline cache."
-      );
+      setUploadNotice(res.data.is_offline ? "📌 File pinned for Offline access." : "Removed file from Offline cache.");
       await fetchWorkspace();
     } catch (err) {
       console.error("Offline toggle failed:", err);
@@ -561,11 +553,7 @@ export default function App() {
     if (e) e.stopPropagation();
     try {
       const res = await axios.post(`${API_BASE}/documents/${docId}/spam`);
-      setUploadNotice(
-        res.data.status === "Spam"
-          ? "⚠️ File moved to Spam quarantine."
-          : "✅ File restored from Spam to Active workspace."
-      );
+      setUploadNotice(res.data.status === "Spam" ? "⚠️ File moved to Spam quarantine." : "✅ File restored from Spam.");
       await fetchWorkspace();
     } catch (err) {
       console.error("Spam toggle failed:", err);
@@ -577,13 +565,11 @@ export default function App() {
     try {
       const res = await axios.post(`${API_BASE}/documents/${docId}/share`);
       const shareUrl = res.data.share_url;
-      if (navigator.clipboard) {
-        await navigator.clipboard.writeText(shareUrl);
-      }
-      setUploadNotice(`🔗 Shareable link copied to clipboard: ${shareUrl}`);
+      if (navigator.clipboard) await navigator.clipboard.writeText(shareUrl);
+      setUploadNotice(`🔗 Shareable link copied: ${shareUrl}`);
       setTimeout(() => setUploadNotice(""), 6000);
     } catch (err) {
-      alert("Could not generate share link: " + (err.response?.data?.detail || err.message));
+      alert("Could not generate share link.");
     }
   };
 
@@ -608,26 +594,18 @@ export default function App() {
     if (!folderAiTarget) return;
     const qText = (customPrompt || folderAiQuestion).trim();
     if (!qText) return;
-
     setFolderAiMessages((prev) => [...prev, { role: "user", text: qText }]);
     if (!customPrompt) setFolderAiQuestion("");
     setFolderAiLoading(true);
-
     try {
       const res = await axios.post(`${API_BASE}/folders/ask`, {
         user_id: currentUser.id,
         category: folderAiTarget,
         question: qText
       });
-      setFolderAiMessages((prev) => [
-        ...prev,
-        { role: "ai", text: res.data.answer || "No synthesis generated." }
-      ]);
+      setFolderAiMessages((prev) => [...prev, { role: "ai", text: res.data.answer || "No synthesis generated." }]);
     } catch (err) {
-      setFolderAiMessages((prev) => [
-        ...prev,
-        { role: "ai", text: "Error synthesizing folder: " + (err.response?.data?.detail || err.message) }
-      ]);
+      setFolderAiMessages((prev) => [...prev, { role: "ai", text: "Error: " + (err.response?.data?.detail || err.message) }]);
     } finally {
       setFolderAiLoading(false);
     }
@@ -637,11 +615,9 @@ export default function App() {
     const content = [
       `# SmartSorter AI Study Notes: ${titleName}`,
       `Generated on: ${new Date().toLocaleString()}`,
-      `User: ${currentUser?.name} (${currentUser?.email})`,
       `\n---\n`,
       ...messagesList.map((m) => `### ${m.role === "user" ? "🧑 Question" : "✨ Gemini AI"}\n${m.text}\n`)
     ].join("\n");
-
     const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -658,7 +634,7 @@ export default function App() {
     const updated = Array.from(new Set([...customCategories, clean]));
     setCustomCategories(updated);
     localStorage.setItem("sorter_custom_folders", JSON.stringify(updated));
-    setUploadNotice(`📁 Created custom folder "${clean}". You can now move any file into it!`);
+    setUploadNotice(`📁 Created custom folder "${clean}".`);
     setTimeout(() => setUploadNotice(""), 4000);
   };
 
@@ -672,17 +648,12 @@ export default function App() {
       setCustomCategories(updated);
       localStorage.setItem("sorter_custom_folders", JSON.stringify(updated));
     }
-
     try {
-      await axios.put(`${API_BASE}/documents/${docId}/category`, {
-        new_category: targetCategory,
-      });
-      if (previewDoc && previewDoc.id === docId) {
-        setPreviewDoc({ ...previewDoc, category: targetCategory });
-      }
+      await axios.put(`${API_BASE}/documents/${docId}/category`, { new_category: targetCategory });
+      if (previewDoc && previewDoc.id === docId) setPreviewDoc({ ...previewDoc, category: targetCategory });
       await fetchWorkspace();
     } catch (err) {
-      alert("Failed to move category: " + (err.response?.data?.detail || err.message));
+      alert("Failed to move category.");
     }
   };
 
@@ -690,24 +661,14 @@ export default function App() {
     if (!previewDoc) return;
     const qText = (customPrompt || qaQuestion).trim();
     if (!qText) return;
-
     setQaMessages((prev) => [...prev, { role: "user", text: qText }]);
     if (!customPrompt) setQaQuestion("");
     setQaLoading(true);
-
     try {
-      const res = await axios.post(`${API_BASE}/documents/${previewDoc.id}/ask`, {
-        question: qText,
-      });
-      setQaMessages((prev) => [
-        ...prev,
-        { role: "ai", text: res.data.answer || "No response generated." }
-      ]);
+      const res = await axios.post(`${API_BASE}/documents/${previewDoc.id}/ask`, { question: qText });
+      setQaMessages((prev) => [...prev, { role: "ai", text: res.data.answer || "No response generated." }]);
     } catch (err) {
-      setQaMessages((prev) => [
-        ...prev,
-        { role: "ai", text: "Error analyzing document: " + (err.response?.data?.detail || err.message) }
-      ]);
+      setQaMessages((prev) => [...prev, { role: "ai", text: "Error: " + (err.response?.data?.detail || err.message) }]);
     } finally {
       setQaLoading(false);
     }
@@ -719,18 +680,12 @@ export default function App() {
 
   const handleExportFolderZip = (categoryName, e) => {
     if (e) e.stopPropagation();
-    window.open(
-      `${API_BASE}/documents/export-zip?user_id=${currentUser.id}&category=${encodeURIComponent(categoryName)}`,
-      "_blank"
-    );
+    window.open(`${API_BASE}/documents/export-zip?user_id=${currentUser.id}&category=${encodeURIComponent(categoryName)}`, "_blank");
   };
 
   const handleDeleteSingle = async (docId, filename, permanent = false) => {
-    const confirmMsg = permanent 
-      ? `Permanently delete "${filename}"? This removes it completely from SQLite and disk.`
-      : `Move "${filename}" to Bin?`;
+    const confirmMsg = permanent ? `Permanently delete "${filename}"?` : `Move "${filename}" to Bin?`;
     if (!window.confirm(confirmMsg)) return;
-
     try {
       await axios.delete(`${API_BASE}/documents/${docId}?permanent=${permanent}`);
       if (previewDoc && previewDoc.id === docId) setPreviewDoc(null);
@@ -750,7 +705,7 @@ export default function App() {
   };
 
   const handleHardDeleteAll = async () => {
-    if (!window.confirm("⚠️ PERMANENT WIPE: This will delete all files permanently from SQLite and disk. Continue?")) return;
+    if (!window.confirm("⚠️ PERMANENT WIPE: Delete all files permanently from SQLite and disk?")) return;
     try {
       await axios.post(`${API_BASE}/documents/hard-delete-all?user_id=${currentUser.id}`);
       await fetchWorkspace();
@@ -761,37 +716,28 @@ export default function App() {
 
   const handleUploadSubmit = async (e) => {
     e.preventDefault();
-    if (!selectedFiles.length) {
-      alert("Please select at least one file first.");
-      return;
-    }
-
+    if (!selectedFiles.length) return;
     setIsUploading(true);
     const formData = new FormData();
     formData.append("user_id", currentUser.id);
-    for (let file of selectedFiles) {
-      formData.append("files", file);
-    }
+    for (let file of selectedFiles) formData.append("files", file);
 
     try {
       const res = await axios.post(`${API_BASE}/documents/upload`, formData, {
-        headers: { "Content-Type": "multipart/form-data" },
+        headers: { "Content-Type": "multipart/form-data" }
       });
       setSelectedFiles([]);
       setUploadModalOpen(false);
       await fetchWorkspace();
-
       const skipped = res.data.skipped_duplicates || [];
       if (skipped.length > 0) {
-        const names = skipped.map((s) => `${s.filename}`).join(", ");
-        setUploadNotice(`🛡️ SHA-256 Duplicate Filter: Routed ${skipped.length} duplicate file(s) to Spam (${names}).`);
+        setUploadNotice(`🛡️ SHA-256 Duplicate Filter: Routed ${skipped.length} duplicate(s) to Spam.`);
       } else {
-        setUploadNotice(`✅ Successfully classified & indexed ${res.data.files?.length || 0} file(s)!`);
+        setUploadNotice(`✅ Classified & indexed ${res.data.files?.length || 0} file(s)!`);
       }
       setTimeout(() => setUploadNotice(""), 6000);
     } catch (err) {
-      const detail = err.response?.data?.detail || err.message || "Upload request failed";
-      alert("Upload Error: " + (typeof detail === "object" ? JSON.stringify(detail) : detail));
+      alert("Upload Error: " + (err.response?.data?.detail || err.message));
     } finally {
       setIsUploading(false);
     }
@@ -799,304 +745,294 @@ export default function App() {
 
   const getFileIcon = (filename) => {
     const ext = filename.split(".").pop().toLowerCase();
-    if (["pdf"].includes(ext)) return <FileText className="w-6 h-6 text-red-400" />;
-    if (["doc", "docx", "txt", "md"].includes(ext)) return <FileText className="w-6 h-6 text-blue-400" />;
-    if (["py", "js", "ts", "html", "css", "java", "sql"].includes(ext)) return <Code className="w-6 h-6 text-emerald-400" />;
-    if (["png", "jpg", "jpeg", "webp"].includes(ext)) return <ImageIcon className="w-6 h-6 text-amber-400" />;
-    if (["mp4", "mov", "avi"].includes(ext)) return <Video className="w-6 h-6 text-purple-400" />;
-    return <Package className="w-6 h-6 text-slate-400" />;
+    if (["pdf"].includes(ext)) return <FileText className="w-6 h-6 text-rose-500" />;
+    if (["doc", "docx", "txt", "md"].includes(ext)) return <FileText className="w-6 h-6 text-violet-600" />;
+    if (["py", "js", "ts", "html", "css", "java", "sql"].includes(ext)) return <Code className="w-6 h-6 text-emerald-600" />;
+    if (["png", "jpg", "jpeg", "webp"].includes(ext)) return <ImageIcon className="w-6 h-6 text-orange-500" />;
+    if (["mp4", "mov", "avi"].includes(ext)) return <Video className="w-6 h-6 text-pink-600" />;
+    return <Package className="w-6 h-6 text-indigo-500" />;
   };
 
   // =========================================================
-  // VIEW 1: AUTHENTICATION PORTAL (USER OR CREATOR LOGIN)
+  // VIEW 1: BRIGHT GEN-Z 3D NEO-GLASS AUTHENTICATION PORTAL
   // =========================================================
   if (!currentUser) {
     return (
-      <div className="flex min-h-screen w-screen items-center justify-center bg-[#0a0f1d] p-4 text-slate-100 font-sans">
-        <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#111827]/90 p-8 shadow-2xl backdrop-blur-xl">
-          <div className="mb-6 flex flex-col items-center text-center">
-            {portalMode === "admin" ? (
-              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500 shadow-lg shadow-amber-500/30">
-                <ShieldCheck className="h-6 w-6 text-slate-950 font-bold" />
+      <div className="relative flex min-h-screen w-screen items-center justify-center p-4 text-slate-900 overflow-hidden">
+        <Interactive3DBackground accent={portalMode === "admin" ? "coral" : "violet"} />
+
+        <div ref={cascadeContainerRef} className="relative z-10 w-full max-w-md gsap-3d-item">
+          <TiltSpotlightCard
+            maxTilt={7}
+            glowColor={portalMode === "admin" ? "rgba(249, 115, 22, 0.18)" : "rgba(219, 39, 119, 0.18)"}
+            className="rounded-3xl p-8"
+          >
+            <div className="mb-6 flex flex-col items-center text-center">
+              <div
+                className={`mb-3.5 flex h-14 w-14 items-center justify-center rounded-2xl neo-btn ${
+                  portalMode === "admin" ? "text-orange-500" : "text-violet-600"
+                }`}
+              >
+                {portalMode === "admin" ? <ShieldCheck className="h-7 w-7" /> : <Folder className="h-7 w-7" />}
               </div>
-            ) : (
-              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 shadow-lg shadow-blue-500/30">
-                <Folder className="h-6 w-6 text-white" />
+              <h1 className="text-2xl font-extrabold tracking-tight bg-gradient-to-r from-violet-700 via-fuchsia-600 to-orange-500 bg-clip-text text-transparent">
+                {portalMode === "admin" ? "Creator Studio 3D" : "SmartSorter 3D"}
+              </h1>
+              <p className="mt-1 text-xs font-medium text-slate-500">
+                {portalMode === "admin"
+                  ? "Dedicated Project Telemetry, Governance & Support Console"
+                  : "Daylight Neo-Glass AI Workspace & Identity-Locked Cloud Bridge"}
+              </p>
+            </div>
+
+            {(portalMode === "user" || portalMode === "admin") && (
+              <div className="mb-6 grid grid-cols-2 gap-2 rounded-2xl neo-recessed p-1.5">
+                <button
+                  type="button"
+                  onClick={() => { setPortalMode("user"); setAuthError(""); setAuthSuccess(""); }}
+                  className={`py-2.5 text-xs font-bold rounded-xl transition ${
+                    portalMode === "user" ? "neo-btn-active" : "text-slate-600 hover:text-violet-700"
+                  }`}
+                >
+                  User Workspace
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setPortalMode("admin"); setAuthError(""); setAuthSuccess(""); }}
+                  className={`flex items-center justify-center gap-1.5 py-2.5 text-xs font-bold rounded-xl transition ${
+                    portalMode === "admin"
+                      ? "bg-gradient-to-r from-orange-500 to-pink-500 text-white shadow-md"
+                      : "text-slate-600 hover:text-orange-600"
+                  }`}
+                >
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>Creator Admin</span>
+                </button>
               </div>
             )}
-            
-            <h1 className="text-2xl font-bold tracking-tight text-white">
-              {portalMode === "admin" ? "Creator Operations Portal" : "SmartSorter"}
-            </h1>
-            <p className="mt-1 text-xs text-slate-400">
-              {portalMode === "admin" 
-                ? "Dedicated project control, user governance & support desk" 
-                : "Identity-Bound Cloud AI File Workspace"}
-            </p>
-          </div>
 
-          {(portalMode === "user" || portalMode === "admin") && (
-            <div className="mb-6 grid grid-cols-2 gap-1 rounded-xl bg-slate-900/80 p-1 border border-white/5">
-              <button
-                type="button"
-                onClick={() => { setPortalMode("user"); setAuthError(""); setAuthSuccess(""); }}
-                className={`py-2 text-xs font-semibold rounded-lg transition ${
-                  portalMode === "user" ? "bg-blue-600 text-white shadow-md" : "text-slate-400 hover:text-white"
-                }`}
-              >
-                User Portal
-              </button>
-              <button
-                type="button"
-                onClick={() => { setPortalMode("admin"); setAuthError(""); setAuthSuccess(""); }}
-                className={`flex items-center justify-center gap-1.5 py-2 text-xs font-semibold rounded-lg transition ${
-                  portalMode === "admin" ? "bg-amber-500 text-slate-950 font-bold shadow-md" : "text-amber-400/80 hover:text-amber-300"
-                }`}
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Creator Admin</span>
-              </button>
-            </div>
-          )}
-
-          {authError && (
-            <div className="mb-4 flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              <span>{authError}</span>
-            </div>
-          )}
-          {authSuccess && (
-            <div className="mb-4 flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-400">
-              <CheckCircle2 className="h-4 w-4 shrink-0" />
-              <span>{authSuccess}</span>
-            </div>
-          )}
-
-          {portalMode === "user" && (
-            <form onSubmit={(e) => handleLogin(e, false)} className="space-y-4">
-              <div>
-                <label className="text-xs font-semibold text-slate-300">Gmail / Email Address</label>
-                <div className="relative mt-1">
-                  <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                  <input
-                    type="email"
-                    required
-                    value={loginEmail}
-                    onChange={(e) => setLoginEmail(e.target.value)}
-                    placeholder="Enter your Gmail ID"
-                    className="w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
-                  />
-                </div>
+            {authError && (
+              <div className="mb-4 flex items-center gap-2 rounded-2xl border border-rose-300 bg-rose-50 p-3 text-xs font-semibold text-rose-700">
+                <AlertCircle className="h-4 w-4 shrink-0 text-rose-500" />
+                <span>{authError}</span>
               </div>
-
-              <div>
-                <label className="text-xs font-semibold text-slate-300">Password</label>
-                <div className="relative mt-1">
-                  <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                  <input
-                    type="password"
-                    required
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
-                  />
-                </div>
+            )}
+            {authSuccess && (
+              <div className="mb-4 flex items-center gap-2 rounded-2xl border border-emerald-300 bg-emerald-50 p-3 text-xs font-semibold text-emerald-700">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                <span>{authSuccess}</span>
               </div>
+            )}
 
-              <button
-                type="submit"
-                disabled={authLoading}
-                className="w-full rounded-xl bg-blue-600 py-2.5 text-xs font-semibold text-white shadow-lg shadow-blue-600/30 transition hover:bg-blue-500 active:scale-95 disabled:opacity-50"
-              >
-                {authLoading ? "Signing In..." : "Sign In →"}
-              </button>
+            {portalMode === "user" && (
+              <form onSubmit={(e) => handleLogin(e, false)} className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-slate-700">Gmail / Email Address</label>
+                  <div className="relative mt-1.5">
+                    <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-violet-500" />
+                    <input
+                      type="email"
+                      required
+                      value={loginEmail}
+                      onChange={(e) => setLoginEmail(e.target.value)}
+                      placeholder="Enter your Gmail ID"
+                      className="w-full rounded-2xl neo-recessed py-3 pl-10 pr-4 text-xs font-medium text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-400"
+                    />
+                  </div>
+                </div>
 
-              <div className="flex items-center justify-between pt-2 text-xs">
+                <div>
+                  <label className="text-xs font-bold text-slate-700">Password</label>
+                  <div className="relative mt-1.5">
+                    <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-pink-500" />
+                    <input
+                      type="password"
+                      required
+                      value={loginPassword}
+                      onChange={(e) => setLoginPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full rounded-2xl neo-recessed py-3 pl-10 pr-4 text-xs font-medium text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-pink-400"
+                    />
+                  </div>
+                </div>
+
+                <MagneticButton
+                  type="submit"
+                  disabled={authLoading}
+                  className="w-full rounded-2xl neo-btn-active py-3 text-xs font-extrabold tracking-wide transition hover:brightness-105"
+                >
+                  {authLoading ? "Entering 3D Workspace..." : "Launch SmartSorter →"}
+                </MagneticButton>
+
+                <div className="flex items-center justify-between pt-2 text-xs font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => { setPortalMode("register"); setAuthError(""); setAuthSuccess(""); }}
+                    className="text-slate-600 hover:text-violet-700"
+                  >
+                    Create account (100 MB Free)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPortalMode("reset");
+                      setResetEmail(loginEmail);
+                      setResetStep(1);
+                      setResetOtp("");
+                      setOtpTimer(0);
+                      setAuthError("");
+                      setAuthSuccess("");
+                    }}
+                    className="text-pink-600 hover:text-violet-700"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {portalMode === "admin" && (
+              <form onSubmit={(e) => handleLogin(e, true)} className="space-y-4">
+                <div className="p-3 rounded-2xl bg-orange-50 border border-orange-200 text-[11px] text-orange-800 text-center font-semibold">
+                  Restricted to Project Creator: <strong>noragamiarota@gmail.com</strong>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700">Creator Admin Email</label>
+                  <div className="relative mt-1.5">
+                    <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-orange-500" />
+                    <input
+                      type="email"
+                      required
+                      value={loginEmail}
+                      onChange={(e) => setLoginEmail(e.target.value)}
+                      placeholder="noragamiarota@gmail.com"
+                      className="w-full rounded-2xl neo-recessed py-3 pl-10 pr-4 text-xs font-medium text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-400"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700">Admin Password</label>
+                  <div className="relative mt-1.5">
+                    <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-orange-500" />
+                    <input
+                      type="password"
+                      required
+                      value={loginPassword}
+                      onChange={(e) => setLoginPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full rounded-2xl neo-recessed py-3 pl-10 pr-4 text-xs font-medium text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-400"
+                    />
+                  </div>
+                </div>
+
+                <MagneticButton
+                  type="submit"
+                  disabled={authLoading}
+                  className="w-full rounded-2xl bg-gradient-to-r from-orange-500 via-pink-500 to-rose-500 py-3 text-xs font-extrabold text-white shadow-lg shadow-orange-500/30"
+                >
+                  {authLoading ? "Verifying Creator..." : "Open Creator Studio →"}
+                </MagneticButton>
+              </form>
+            )}
+
+            {portalMode === "register" && (
+              <form onSubmit={handleRegister} className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-slate-700">Full Name</label>
+                  <div className="relative mt-1.5">
+                    <UserIcon className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-violet-500" />
+                    <input
+                      type="text"
+                      required
+                      value={regName}
+                      onChange={(e) => setRegName(e.target.value)}
+                      placeholder="Enter your name"
+                      className="w-full rounded-2xl neo-recessed py-3 pl-10 pr-4 text-xs font-medium text-slate-900 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700">Personal Gmail Address</label>
+                  <div className="relative mt-1.5">
+                    <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-violet-500" />
+                    <input
+                      type="email"
+                      required
+                      value={regEmail}
+                      onChange={(e) => setRegEmail(e.target.value)}
+                      placeholder="yourname@gmail.com"
+                      className="w-full rounded-2xl neo-recessed py-3 pl-10 pr-4 text-xs font-medium text-slate-900 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700">Password</label>
+                  <div className="relative mt-1.5">
+                    <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-pink-500" />
+                    <input
+                      type="password"
+                      required
+                      value={regPassword}
+                      onChange={(e) => setRegPassword(e.target.value)}
+                      placeholder="Choose a password"
+                      className="w-full rounded-2xl neo-recessed py-3 pl-10 pr-4 text-xs font-medium text-slate-900 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <MagneticButton
+                  type="submit"
+                  disabled={authLoading}
+                  className="w-full rounded-2xl neo-btn-active py-3 text-xs font-extrabold"
+                >
+                  {authLoading ? "Creating Account..." : "Create Account (100 MB Free) →"}
+                </MagneticButton>
+
                 <button
                   type="button"
-                  onClick={() => { setPortalMode("register"); setAuthError(""); setAuthSuccess(""); }}
-                  className="text-slate-400 hover:text-white"
+                  onClick={() => { setPortalMode("user"); setAuthError(""); setAuthSuccess(""); }}
+                  className="flex w-full items-center justify-center gap-1.5 pt-2 text-xs font-semibold text-slate-600 hover:text-violet-700"
                 >
-                  Create an account
+                  <ArrowLeft className="h-3.5 w-3.5" /> Back to Sign In
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPortalMode("reset");
-                    setResetEmail(loginEmail);
-                    setResetStep(1);
-                    setResetOtp("");
-                    setOtpTimer(0);
-                    setAuthError("");
-                    setAuthSuccess("");
-                  }}
-                  className="font-medium text-blue-400 hover:text-blue-300"
-                >
-                  Forgot password?
-                </button>
-              </div>
-            </form>
-          )}
+              </form>
+            )}
 
-          {portalMode === "admin" && (
-            <form onSubmit={(e) => handleLogin(e, true)} className="space-y-4">
-              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300 text-center font-medium">
-                Restricted to Project Creator: <strong>noragamiarota@gmail.com</strong>
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-slate-300">Creator Admin Mail</label>
-                <div className="relative mt-1">
-                  <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                  <input
-                    type="email"
-                    required
-                    value={loginEmail}
-                    onChange={(e) => setLoginEmail(e.target.value)}
-                    placeholder="noragamiarota@gmail.com"
-                    className="w-full rounded-xl border border-amber-500/30 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-slate-300">Admin Password</label>
-                <div className="relative mt-1">
-                  <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                  <input
-                    type="password"
-                    required
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full rounded-xl border border-amber-500/30 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={authLoading}
-                className="w-full rounded-xl bg-amber-500 py-2.5 text-xs font-bold text-slate-950 shadow-lg shadow-amber-500/20 transition hover:bg-amber-400 active:scale-95 disabled:opacity-50"
-              >
-                {authLoading ? "Verifying Creator..." : "Launch Operations Console →"}
-              </button>
-            </form>
-          )}
-
-          {portalMode === "register" && (
-            <form onSubmit={handleRegister} className="space-y-4">
-              <div>
-                <label className="text-xs font-semibold text-slate-300">Full Name</label>
-                <div className="relative mt-1">
-                  <UserIcon className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                  <input
-                    type="text"
-                    required
-                    value={regName}
-                    onChange={(e) => setRegName(e.target.value)}
-                    placeholder="Enter your name"
-                    className="w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-slate-300">Personal Gmail Address</label>
-                <div className="relative mt-1">
-                  <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                  <input
-                    type="email"
-                    required
-                    value={regEmail}
-                    onChange={(e) => setRegEmail(e.target.value)}
-                    placeholder="yourname@gmail.com"
-                    className="w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-slate-300">Password</label>
-                <div className="relative mt-1">
-                  <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                  <input
-                    type="password"
-                    required
-                    value={regPassword}
-                    onChange={(e) => setRegPassword(e.target.value)}
-                    placeholder="Choose a password"
-                    className="w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={authLoading}
-                className="w-full rounded-xl bg-blue-600 py-2.5 text-xs font-semibold text-white shadow-lg shadow-blue-600/30 transition hover:bg-blue-500 active:scale-95 disabled:opacity-50"
-              >
-                {authLoading ? "Creating Account..." : "Create Account (100 MB Free) →"}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => { setPortalMode("user"); setAuthError(""); setAuthSuccess(""); }}
-                className="flex w-full items-center justify-center gap-1.5 pt-2 text-xs text-slate-400 hover:text-white"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" /> Back to Sign In
-              </button>
-            </form>
-          )}
-
-          {portalMode === "reset" && (
-            <div className="space-y-4">
-              {resetStep === 1 && (
-                <form onSubmit={handleSendOtp} className="space-y-4">
-                  <div>
-                    <label className="text-xs font-semibold text-slate-300">Registered Account Email</label>
-                    <div className="relative mt-1">
-                      <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+            {portalMode === "reset" && (
+              <div className="space-y-4">
+                {resetStep === 1 && (
+                  <form onSubmit={handleSendOtp} className="space-y-4">
+                    <div>
+                      <label className="text-xs font-bold text-slate-700">Registered Account Email</label>
                       <input
                         type="email"
                         required
                         value={resetEmail}
                         onChange={(e) => setResetEmail(e.target.value)}
-                        placeholder="Enter your registered mail ID"
-                        className="w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+                        placeholder="Enter your registered Gmail"
+                        className="mt-1.5 w-full rounded-2xl neo-recessed py-3 px-4 text-xs font-medium text-slate-900 focus:outline-none"
                       />
                     </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={authLoading}
-                    className="w-full rounded-xl bg-blue-600 py-2.5 text-xs font-semibold text-white shadow-lg shadow-blue-600/30 hover:bg-blue-500 transition disabled:opacity-50"
-                  >
-                    {authLoading ? "Dispatching OTP..." : "📧 Send OTP to Registered Email"}
-                  </button>
-                </form>
-              )}
-
-              {resetStep === 2 && (
-                <form onSubmit={handleVerifyOtp} className="space-y-4">
-                  <div className="flex items-center justify-between rounded-xl bg-slate-900/90 border border-white/10 px-3.5 py-2 text-xs">
-                    <span className="text-slate-400 truncate max-w-[180px]">{resetEmail}</span>
-                    <button
-                      type="button"
-                      onClick={() => { setResetStep(1); setAuthError(""); setAuthSuccess(""); }}
-                      className="text-blue-400 hover:text-blue-300 font-medium text-[11px]"
+                    <MagneticButton
+                      type="submit"
+                      disabled={authLoading}
+                      className="w-full rounded-2xl neo-btn-active py-3 text-xs font-extrabold"
                     >
-                      Change Email
-                    </button>
-                  </div>
+                      {authLoading ? "Dispatching OTP..." : "📧 Send 3-Min OTP to Email"}
+                    </MagneticButton>
+                  </form>
+                )}
 
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-semibold text-slate-300">Enter 6-Digit OTP</label>
-                      <span className={`text-xs font-mono font-bold ${otpTimer > 30 ? "text-amber-400" : "text-red-400"}`}>
-                        {otpTimer > 0 ? `⏱ ${formatCountdown(otpTimer)}` : "⏱ Expired (00:00)"}
+                {resetStep === 2 && (
+                  <form onSubmit={handleVerifyOtp} className="space-y-4">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-700 font-bold">Enter 6-Digit OTP</span>
+                      <span className="font-mono font-bold text-pink-600">
+                        {otpTimer > 0 ? `⏱ ${formatCountdown(otpTimer)}` : "⏱ Expired"}
                       </span>
                     </div>
                     <input
@@ -1107,97 +1043,73 @@ export default function App() {
                       value={resetOtp}
                       onChange={(e) => setResetOtp(e.target.value.replace(/\D/g, ""))}
                       placeholder="• • • • • •"
-                      className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 px-4 text-center tracking-[0.5em] text-lg font-bold text-white focus:border-blue-500 focus:outline-none disabled:opacity-40"
+                      className="w-full rounded-2xl neo-recessed py-3 px-4 text-center tracking-[0.5em] text-lg font-extrabold text-violet-700 focus:outline-none"
                     />
-                  </div>
+                    {otpTimer > 0 ? (
+                      <MagneticButton
+                        type="submit"
+                        disabled={authLoading || resetOtp.length !== 6}
+                        className="w-full rounded-2xl neo-btn-active py-3 text-xs font-extrabold"
+                      >
+                        Verify OTP →
+                      </MagneticButton>
+                    ) : (
+                      <MagneticButton
+                        type="button"
+                        onClick={handleSendOtp}
+                        className="w-full rounded-2xl bg-orange-500 py-3 text-xs font-extrabold text-white"
+                      >
+                        ↻ Resend OTP
+                      </MagneticButton>
+                    )}
+                  </form>
+                )}
 
-                  {otpTimer > 0 ? (
-                    <button
+                {resetStep === 3 && (
+                  <form onSubmit={handleResetPassword} className="space-y-4">
+                    <input
+                      type="password"
+                      required
+                      value={resetNewPass}
+                      onChange={(e) => setResetNewPass(e.target.value)}
+                      placeholder="Enter new password"
+                      className="w-full rounded-2xl neo-recessed py-3 px-4 text-xs font-medium text-slate-900 focus:outline-none"
+                    />
+                    <input
+                      type="password"
+                      required
+                      value={resetConfirmPass}
+                      onChange={(e) => setResetConfirmPass(e.target.value)}
+                      placeholder="Confirm new password"
+                      className="w-full rounded-2xl neo-recessed py-3 px-4 text-xs font-medium text-slate-900 focus:outline-none"
+                    />
+                    <MagneticButton
                       type="submit"
-                      disabled={authLoading || resetOtp.length !== 6}
-                      className="w-full rounded-xl bg-blue-600 py-2.5 text-xs font-semibold text-white shadow-lg shadow-blue-600/30 transition hover:bg-blue-500 disabled:opacity-50"
-                    >
-                      {authLoading ? "Verifying OTP..." : "Verify OTP →"}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleSendOtp}
                       disabled={authLoading}
-                      className="w-full rounded-xl bg-amber-500 py-2.5 text-xs font-bold text-slate-950 shadow-lg shadow-amber-500/20 transition hover:bg-amber-400"
+                      className="w-full rounded-2xl bg-emerald-500 py-3 text-xs font-extrabold text-white"
                     >
-                      {authLoading ? "Sending New OTP..." : "↻ Resend OTP"}
-                    </button>
-                  )}
-                </form>
-              )}
+                      Save New Password
+                    </MagneticButton>
+                  </form>
+                )}
 
-              {resetStep === 3 && (
-                <form onSubmit={handleResetPassword} className="space-y-4">
-                  <div>
-                    <label className="text-xs font-semibold text-slate-300">New Password</label>
-                    <div className="relative mt-1">
-                      <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                      <input
-                        type="password"
-                        required
-                        value={resetNewPass}
-                        onChange={(e) => setResetNewPass(e.target.value)}
-                        placeholder="Enter new password"
-                        className="w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-xs font-semibold text-slate-300">Confirm New Password</label>
-                    <div className="relative mt-1">
-                      <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                      <input
-                        type="password"
-                        required
-                        value={resetConfirmPass}
-                        onChange={(e) => setResetConfirmPass(e.target.value)}
-                        placeholder="Confirm new password"
-                        className="w-full rounded-xl border border-white/10 bg-slate-900/60 py-2.5 pl-10 pr-4 text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={authLoading}
-                    className="w-full rounded-xl bg-emerald-600 py-2.5 text-xs font-semibold text-white shadow-lg shadow-emerald-600/30 transition hover:bg-emerald-500 active:scale-95"
-                  >
-                    {authLoading ? "Updating..." : "Save New Password"}
-                  </button>
-                </form>
-              )}
-
-              <button
-                type="button"
-                onClick={() => {
-                  setPortalMode("user");
-                  setResetStep(1);
-                  setResetOtp("");
-                  setOtpTimer(0);
-                  setAuthError("");
-                  setAuthSuccess("");
-                }}
-                className="flex w-full items-center justify-center gap-1.5 pt-2 text-xs text-slate-400 hover:text-white"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" /> Back to Sign In
-              </button>
-            </div>
-          )}
+                <button
+                  type="button"
+                  onClick={() => { setPortalMode("user"); setResetStep(1); setResetOtp(""); setOtpTimer(0); }}
+                  className="flex w-full items-center justify-center gap-1.5 pt-2 text-xs font-semibold text-slate-600 hover:text-violet-700"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" /> Back to Sign In
+                </button>
+              </div>
+            )}
+          </TiltSpotlightCard>
         </div>
       </div>
     );
   }
 
   // =========================================================
-  // VIEW 2A: DEDICATED CREATOR OPERATIONS CONSOLE
-  // (No personal uploads, no personal drive, no subscription plans)
+  // VIEW 2A: DEDICATED BRIGHT CREATOR OPERATIONS CONSOLE
   // =========================================================
   if (isCreatorAdmin) {
     const filteredTickets = feedbackList.filter((t) =>
@@ -1205,426 +1117,232 @@ export default function App() {
     );
 
     return (
-      <div className="flex h-screen w-screen overflow-hidden bg-[#0b0f19] text-slate-100 font-sans">
-        {/* Creator Operations Left Sidebar */}
-        <aside className="w-64 border-r border-amber-500/15 bg-[#111827] flex flex-col justify-between py-6 px-4 shrink-0 select-none">
+      <div className="relative flex h-screen w-screen overflow-hidden text-slate-900">
+        <Interactive3DBackground accent="coral" />
+
+        <aside className="relative z-10 w-64 m-3 rounded-3xl neo-glass flex flex-col justify-between p-5 shrink-0 select-none">
           <div>
-            <div className="flex items-center gap-3 px-2 pb-5 mb-4 border-b border-white/10">
-              <div className="w-10 h-10 rounded-2xl bg-amber-500 flex items-center justify-center text-slate-950 font-extrabold shadow-lg shadow-amber-500/20">
+            <div className="flex items-center gap-3 pb-5 mb-4 border-b border-slate-200/80">
+              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-orange-500 to-pink-500 flex items-center justify-center text-white font-extrabold shadow-md">
                 <ShieldCheck className="w-6 h-6" />
               </div>
-              <div className="overflow-hidden">
-                <h1 className="text-base font-bold tracking-tight text-white">Creator Console</h1>
-                <p className="text-[11px] text-amber-400 font-semibold truncate">
-                  Project Operations Only
-                </p>
+              <div>
+                <h1 className="text-base font-extrabold text-slate-900">Creator Studio</h1>
+                <p className="text-[11px] text-orange-600 font-bold">Project Operations</p>
               </div>
             </div>
 
-            <nav className="space-y-1.5">
-              <button
-                onClick={() => setCreatorTab("telemetry")}
-                className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl text-xs font-bold transition ${
-                  creatorTab === "telemetry"
-                    ? "bg-amber-500 text-slate-950 shadow-md"
-                    : "text-slate-300 hover:bg-white/5"
-                }`}
-              >
-                <HardDrive className="w-4 h-4 shrink-0" />
-                <span>Project Telemetry</span>
-              </button>
-
-              <button
-                onClick={() => setCreatorTab("support")}
-                className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-xs font-bold transition ${
-                  creatorTab === "support"
-                    ? "bg-amber-500 text-slate-950 shadow-md"
-                    : "text-slate-300 hover:bg-white/5"
-                }`}
-              >
-                <div className="flex items-center gap-3.5">
-                  <HelpCircle className="w-4 h-4 shrink-0" />
-                  <span>Support & Issues Desk</span>
-                </div>
-                {adminData.open_tickets_count > 0 && (
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
-                    creatorTab === "support" ? "bg-slate-950 text-amber-400" : "bg-red-500 text-white"
-                  }`}>
-                    {adminData.open_tickets_count}
-                  </span>
-                )}
-              </button>
-
-              <button
-                onClick={() => setCreatorTab("users")}
-                className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-xs font-bold transition ${
-                  creatorTab === "users"
-                    ? "bg-amber-500 text-slate-950 shadow-md"
-                    : "text-slate-300 hover:bg-white/5"
-                }`}
-              >
-                <div className="flex items-center gap-3.5">
-                  <Shield className="w-4 h-4 shrink-0" />
-                  <span>User Governance</span>
-                </div>
-                <span className={`text-[11px] ${creatorTab === "users" ? "text-slate-950" : "text-slate-400"}`}>
-                  {adminData.member_count}
-                </span>
-              </button>
-
-              <button
-                onClick={() => setCreatorTab("audit")}
-                className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl text-xs font-bold transition ${
-                  creatorTab === "audit"
-                    ? "bg-amber-500 text-slate-950 shadow-md"
-                    : "text-slate-300 hover:bg-white/5"
-                }`}
-              >
-                <Clock className="w-4 h-4 shrink-0" />
-                <span>Security & Audit Logs</span>
-              </button>
+            <nav className="space-y-2">
+              {[
+                { id: "telemetry", label: "Project Telemetry", icon: HardDrive },
+                { id: "support", label: "Support Desk", icon: HelpCircle, badge: adminData.open_tickets_count },
+                { id: "users", label: "User Governance", icon: Shield, badge: adminData.member_count },
+                { id: "audit", label: "Security Audit", icon: Clock }
+              ].map((item) => {
+                const IconComp = item.icon;
+                const active = creatorTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => setCreatorTab(item.id)}
+                    className={`w-full flex items-center justify-between px-4 py-3 rounded-2xl text-xs font-bold transition ${
+                      active
+                        ? "bg-gradient-to-r from-orange-500 to-pink-500 text-white shadow-md"
+                        : "neo-btn text-slate-700 hover:text-orange-600"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <IconComp className="w-4 h-4" />
+                      <span>{item.label}</span>
+                    </div>
+                    {item.badge > 0 && (
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                        active ? "bg-white/25 text-white" : "bg-orange-100 text-orange-700"
+                      }`}>
+                        {item.badge}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </nav>
           </div>
 
-          {/* Creator Status & Sign Out Footer */}
-          <div className="space-y-3">
-            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px]">
-              <p className="font-bold text-amber-300 mb-0.5">⚡ System Status: Online</p>
-              <p className="text-slate-400">SQLite WAL Engine • Gemini 2.5 Flash</p>
+          <div className="flex items-center justify-between p-3 rounded-2xl neo-recessed">
+            <div className="overflow-hidden">
+              <p className="text-xs font-extrabold text-slate-900 truncate">{currentUser.name}</p>
+              <p className="text-[10px] text-orange-600 font-semibold truncate">{currentUser.email}</p>
             </div>
-
-            <div className="flex items-center justify-between p-3 rounded-xl bg-white/[0.03] border border-white/10">
-              <div className="flex items-center gap-2.5 overflow-hidden">
-                <div className="w-8 h-8 rounded-full bg-amber-500 text-slate-950 flex items-center justify-center font-extrabold text-xs shrink-0">
-                  C
-                </div>
-                <div className="overflow-hidden">
-                  <p className="text-xs font-bold text-white truncate">{currentUser.name}</p>
-                  <p className="text-[10px] text-amber-400 truncate">{currentUser.email}</p>
-                </div>
-              </div>
-              <button
-                onClick={handleSignOut}
-                title="Sign Out of Creator Console"
-                className="text-slate-400 hover:text-red-400 p-1.5 rounded-lg hover:bg-white/5 transition"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
-            </div>
+            <button onClick={handleSignOut} className="text-slate-500 hover:text-rose-600 p-1.5">
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
         </aside>
 
-        {/* Creator Operations Main Workspace */}
-        <main className="flex-1 flex flex-col overflow-y-auto px-8 py-6">
-          <header className="flex items-center justify-between pb-5 border-b border-white/10">
-            <div>
-              <h2 className="text-xl font-bold tracking-tight text-white">
-                {creatorTab === "telemetry" && "Global Project Telemetry & AI Classification Health"}
-                {creatorTab === "support" && "User Support, Bug Reports & Issue Resolution Desk"}
-                {creatorTab === "users" && "Registered User Accounts & Cloud Bridge Governance"}
-                {creatorTab === "audit" && "Platform Security & Chronological System Audit"}
-              </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Dedicated administrative control center for SmartSorter operations
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2.5">
-              <button
-                onClick={handleExportAuditCsv}
-                className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold border border-white/10 transition"
-              >
-                <Download className="w-3.5 h-3.5 text-amber-400" />
-                <span>Export System CSV</span>
-              </button>
-              <button
-                onClick={fetchWorkspace}
-                className="flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl text-xs font-bold shadow-lg transition"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Sync Live Telemetry</span>
-              </button>
-            </div>
-          </header>
-
-          {uploadNotice && (
-            <div className="mt-4 flex items-center justify-between rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-xs text-emerald-300">
-              <span>{uploadNotice}</span>
-              <button onClick={() => setUploadNotice("")} className="text-slate-400 hover:text-white">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
-          {/* CREATOR TAB 1: PROJECT TELEMETRY & AI ENGINE */}
-          {creatorTab === "telemetry" && (
-            <div className="mt-6 space-y-6">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="bg-[#151d2c] border border-white/10 p-5 rounded-2xl">
-                  <p className="text-[11px] text-slate-400 uppercase font-bold">Registered Members</p>
-                  <p className="text-3xl font-extrabold text-blue-400 mt-1">{adminData.member_count}</p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    {adminData.pro_subscribers} Paid Maintenance • {adminData.linked_drives_count} Linked Drives
-                  </p>
-                </div>
-
-                <div className="bg-[#151d2c] border border-white/10 p-5 rounded-2xl">
-                  <p className="text-[11px] text-slate-400 uppercase font-bold">Total Files Sorted (Project-Wide)</p>
-                  <p className="text-3xl font-extrabold text-white mt-1">{adminData.total_files_classified}</p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    {adminData.active_files} Active • {adminData.deleted_files} Bin • {adminData.spam_files} Spam
-                  </p>
-                </div>
-
-                <div className="bg-[#151d2c] border border-white/10 p-5 rounded-2xl">
-                  <p className="text-[11px] text-slate-400 uppercase font-bold">Open Support Issues</p>
-                  <p className="text-3xl font-extrabold text-amber-400 mt-1">{adminData.open_tickets_count}</p>
-                  <button
-                    onClick={() => setCreatorTab("support")}
-                    className="text-xs text-amber-300 hover:underline mt-1 inline-block font-semibold"
-                  >
-                    Open Support Desk →
-                  </button>
-                </div>
-
-                <div className="bg-[#151d2c] border border-white/10 p-5 rounded-2xl">
-                  <p className="text-[11px] text-slate-400 uppercase font-bold">Global Index Footprint</p>
-                  <p className="text-3xl font-extrabold text-emerald-400 mt-1">{adminData.total_storage_mb} MB</p>
-                  <p className="text-xs text-slate-500 mt-1">SQLite WAL Concurrency Active</p>
-                </div>
+        <main ref={mainScrollRef} className="relative z-10 flex-1 overflow-y-auto p-6">
+          <div ref={cascadeContainerRef} className="space-y-6">
+            <header className="neo-glass rounded-3xl p-5 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-extrabold bg-gradient-to-r from-slate-900 via-violet-800 to-pink-600 bg-clip-text text-transparent">
+                  {creatorTab === "telemetry" && "3D Project Telemetry & Global AI Health"}
+                  {creatorTab === "support" && "Two-Way Support & Issue Resolution Desk"}
+                  {creatorTab === "users" && "User Accounts & Identity-Bound Cloud Governance"}
+                  {creatorTab === "audit" && "Chronological Security & System Audit"}
+                </h2>
+                <p className="text-xs font-medium text-slate-500">Daylight Neo-Glass Operations Console</p>
               </div>
+              <div className="flex gap-2.5">
+                <MagneticButton
+                  onClick={handleExportAuditCsv}
+                  className="neo-btn px-4 py-2.5 rounded-2xl text-xs font-bold text-violet-700 flex items-center gap-2"
+                >
+                  <Download className="w-3.5 h-3.5" /> Export Audit CSV
+                </MagneticButton>
+                <MagneticButton
+                  onClick={fetchWorkspace}
+                  className="bg-gradient-to-r from-orange-500 to-pink-500 text-white px-4 py-2.5 rounded-2xl text-xs font-extrabold flex items-center gap-2 shadow-md"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Sync Telemetry
+                </MagneticButton>
+              </div>
+            </header>
 
-              {/* Global Category Breakdown */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-[#151d2c] border border-white/10 rounded-2xl p-5">
-                  <h3 className="text-sm font-bold text-white mb-1">Global AI Classification Breakdown</h3>
-                  <p className="text-xs text-slate-400 mb-4">
-                    Aggregate distribution of all files sorted by Gemini Flash across all user workspaces
-                  </p>
-                  {adminData.global_categories && adminData.global_categories.length > 0 ? (
-                    <div className="space-y-3">
-                      {adminData.global_categories.map((catObj) => (
-                        <div key={catObj.category} className="flex items-center justify-between p-3 rounded-xl bg-slate-900/70 border border-white/5 text-xs">
-                          <div className="flex items-center gap-2.5">
-                            <Folder className="w-4 h-4 text-amber-400" />
-                            <span className="font-semibold text-slate-200">{catObj.category}</span>
-                          </div>
-                          <div className="text-right">
-                            <span className="font-bold text-amber-300">{catObj.count} files</span>
-                            <span className="text-slate-500 ml-2 font-mono">({catObj.size_kb} KB)</span>
-                          </div>
+            {uploadNotice && (
+              <div className="neo-glass rounded-2xl px-4 py-3 text-xs font-bold text-emerald-700 flex justify-between">
+                <span>{uploadNotice}</span>
+                <button onClick={() => setUploadNotice("")}><X className="w-4 h-4" /></button>
+              </div>
+            )}
+
+            {creatorTab === "telemetry" && (
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  {[
+                    { label: "Registered Users", val: adminData.member_count, sub: `${adminData.pro_subscribers} Pro • ${adminData.linked_drives_count} Linked`, col: "text-violet-600" },
+                    { label: "Total Files Sorted", val: adminData.total_files_classified, sub: `${adminData.active_files} Active • ${adminData.spam_files} Spam`, col: "text-pink-600" },
+                    { label: "Open Support Issues", val: adminData.open_tickets_count, sub: "Click Support Desk to reply", col: "text-orange-500" },
+                    { label: "Global Index Size", val: `${adminData.total_storage_mb} MB`, sub: "SQLite WAL Active", col: "text-emerald-600" }
+                  ].map((k, i) => (
+                    <TiltSpotlightCard key={i} glowColor="rgba(236, 72, 153, 0.14)" className="rounded-3xl p-5 gsap-3d-item">
+                      <p className="text-[11px] uppercase font-extrabold text-slate-500">{k.label}</p>
+                      <p className={`text-3xl font-extrabold mt-1 ${k.col}`}>{k.val}</p>
+                      <p className="text-xs font-medium text-slate-500 mt-1">{k.sub}</p>
+                    </TiltSpotlightCard>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <TiltSpotlightCard className="rounded-3xl p-6 gsap-3d-item">
+                    <h3 className="text-sm font-extrabold text-slate-800 mb-3">Global AI Classification Distribution</h3>
+                    <div className="space-y-2.5">
+                      {(adminData.global_categories || []).map((c) => (
+                        <div key={c.category} className="neo-recessed p-3 rounded-2xl flex justify-between text-xs">
+                          <span className="font-bold text-slate-800">{c.category}</span>
+                          <span className="font-extrabold text-violet-600">{c.count} files ({c.size_kb} KB)</span>
                         </div>
                       ))}
                     </div>
-                  ) : (
-                    <p className="text-xs text-slate-500 italic py-6 text-center">
-                      No files classified across the platform yet.
-                    </p>
-                  )}
-                </div>
+                  </TiltSpotlightCard>
 
-                <div className="bg-[#151d2c] border border-white/10 rounded-2xl p-5">
-                  <h3 className="text-sm font-bold text-white mb-1">Latest System & User Events</h3>
-                  <p className="text-xs text-slate-400 mb-4">
-                    Real-time stream of user registrations, Drive bindings, and support requests
-                  </p>
-                  <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
-                    {activity.slice(0, 8).map((act) => (
-                      <div key={act.id} className="p-3 rounded-xl bg-slate-900/70 border border-white/5 text-xs">
-                        <div className="flex justify-between font-semibold">
-                          <span className="text-amber-300">{act.username}</span>
-                          <span className="text-[11px] font-mono text-slate-400">{formatTimestamp(act.timestamp)}</span>
+                  <TiltSpotlightCard className="rounded-3xl p-6 gsap-3d-item">
+                    <h3 className="text-sm font-extrabold text-slate-800 mb-3">Live Security & Activity Stream</h3>
+                    <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+                      {activity.slice(0, 8).map((act) => (
+                        <div key={act.id} className="neo-recessed p-3 rounded-2xl text-xs">
+                          <div className="flex justify-between text-pink-600 font-bold">
+                            <span>{act.username}</span>
+                            <span className="font-mono text-[10px] text-slate-500">{formatTimestamp(act.timestamp)}</span>
+                          </div>
+                          <p className="text-slate-900 font-bold mt-0.5">{act.action}</p>
+                          <p className="text-[11px] text-slate-600 italic">{act.details}</p>
                         </div>
-                        <p className="text-slate-200 font-medium mt-0.5">{act.action}</p>
-                        <p className="text-[11px] text-slate-400 italic mt-0.5">{act.details}</p>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  </TiltSpotlightCard>
                 </div>
-              </div>
-            </div>
-          )}
+              </>
+            )}
 
-          {/* CREATOR TAB 2: SUPPORT & ISSUES DESK (INTERACTIVE REPLY SYSTEM) */}
-          {creatorTab === "support" && (
-            <div className="mt-6 space-y-5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  {["All", "Open", "Resolved"].map((statusOpt) => (
+            {creatorTab === "support" && (
+              <div className="space-y-4">
+                <div className="flex gap-2">
+                  {["All", "Open", "Resolved"].map((st) => (
                     <button
-                      key={statusOpt}
-                      onClick={() => setTicketFilter(statusOpt)}
-                      className={`px-4 py-1.5 rounded-xl text-xs font-bold transition ${
-                        ticketFilter === statusOpt
-                          ? "bg-amber-500 text-slate-950"
-                          : "bg-[#151d2c] text-slate-300 border border-white/10 hover:bg-white/5"
+                      key={st}
+                      onClick={() => setTicketFilter(st)}
+                      className={`px-4 py-2 rounded-2xl text-xs font-bold ${
+                        ticketFilter === st ? "neo-btn-active" : "neo-btn text-slate-700"
                       }`}
                     >
-                      {statusOpt} Tickets
+                      {st} Tickets
                     </button>
                   ))}
                 </div>
-                <span className="text-xs text-slate-400">
-                  Showing {filteredTickets.length} support ticket(s)
-                </span>
-              </div>
-
-              {filteredTickets.length > 0 ? (
-                <div className="space-y-4">
-                  {filteredTickets.map((ticket) => (
-                    <div
-                      key={ticket.id}
-                      className="p-5 rounded-2xl bg-[#151d2c] border border-white/10 space-y-3"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/5 pb-3">
-                        <div className="flex items-center gap-2.5">
-                          <span className="px-2.5 py-0.5 rounded-md bg-slate-800 text-slate-300 font-mono text-xs font-bold">
-                            #{ticket.id}
-                          </span>
-                          <span className="text-sm font-bold text-white">{ticket.username}</span>
-                          {ticket.user_email && (
-                            <span className="text-xs text-slate-400">({ticket.user_email})</span>
-                          )}
-                          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-500/20 text-blue-300">
-                            {ticket.category}
-                          </span>
-                        </div>
-
-                        <div className="flex items-center gap-3">
-                          <span className="text-xs font-mono text-slate-400">
-                            {formatTimestamp(ticket.created_at)}
-                          </span>
-                          <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                            ticket.status === "Resolved"
-                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                              : "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                          }`}>
-                            {ticket.status || "Open"}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* User's Submitted Issue */}
-                      <div className="p-3.5 rounded-xl bg-slate-900/80 border border-white/5 text-xs text-slate-200 leading-relaxed">
-                        <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">User Issue / Request:</p>
-                        {ticket.message}
-                      </div>
-
-                      {/* Existing Creator Reply if present */}
-                      {ticket.admin_reply && (
-                        <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
-                          <div className="flex justify-between text-[10px] uppercase font-bold text-amber-400 mb-1">
-                            <span>✓ Your Official Creator Response</span>
-                            {ticket.replied_at && <span>{formatTimestamp(ticket.replied_at)}</span>}
-                          </div>
-                          <p>{ticket.admin_reply}</p>
-                        </div>
-                      )}
-
-                      {/* Reply Input Box for Creator */}
-                      <div className="flex gap-2.5 pt-1">
-                        <input
-                          type="text"
-                          value={replyInputs[ticket.id] || ""}
-                          onChange={(e) =>
-                            setReplyInputs((prev) => ({ ...prev, [ticket.id]: e.target.value }))
-                          }
-                          placeholder={
-                            ticket.admin_reply
-                              ? "Update your official reply to this user..."
-                              : `Write an official reply to ${ticket.username}...`
-                          }
-                          className="flex-1 rounded-xl bg-slate-900 border border-white/10 px-4 py-2 text-xs text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleReplyTicket(ticket.id, "Resolved")}
-                          className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition shrink-0"
-                        >
-                          Send Reply & Resolve
-                        </button>
-                      </div>
+                {filteredTickets.map((t) => (
+                  <TiltSpotlightCard key={t.id} maxTilt={4} className="rounded-3xl p-5 space-y-3 gsap-3d-item">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="font-extrabold text-slate-900">
+                        #{t.id} • {t.username} ({t.user_email}) — <span className="text-violet-600">{t.category}</span>
+                      </span>
+                      <span className="px-3 py-0.5 rounded-full bg-orange-100 text-orange-700 font-bold">
+                        {t.status || "Open"}
+                      </span>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="p-12 rounded-2xl bg-[#151d2c] border border-white/10 text-center text-slate-400 text-sm">
-                  No support tickets matching "{ticketFilter}".
-                </div>
-              )}
-            </div>
-          )}
+                    <div className="neo-recessed p-3.5 rounded-2xl text-xs font-medium text-slate-800">{t.message}</div>
+                    {t.admin_reply && (
+                      <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800">
+                        <strong>Creator Reply:</strong> {t.admin_reply}
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={replyInputs[t.id] || ""}
+                        onChange={(e) => setReplyInputs((p) => ({ ...p, [t.id]: e.target.value }))}
+                        placeholder={`Reply to ${t.username}...`}
+                        className="flex-1 neo-recessed rounded-2xl px-4 py-2.5 text-xs text-slate-900 focus:outline-none"
+                      />
+                      <MagneticButton
+                        onClick={() => handleReplyTicket(t.id, "Resolved")}
+                        className="neo-btn-active px-4 py-2.5 rounded-2xl text-xs font-extrabold"
+                      >
+                        Send Reply & Resolve
+                      </MagneticButton>
+                    </div>
+                  </TiltSpotlightCard>
+                ))}
+              </div>
+            )}
 
-          {/* CREATOR TAB 3: USER & CLOUD BRIDGE GOVERNANCE */}
-          {creatorTab === "users" && (
-            <div className="mt-6">
-              <div className="rounded-2xl border border-white/10 bg-[#151d2c] overflow-hidden">
+            {creatorTab === "users" && (
+              <div className="neo-glass rounded-3xl overflow-hidden gsap-3d-item">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-900/90 text-slate-400 uppercase text-[10px] border-b border-white/10">
+                  <thead className="bg-violet-50/70 text-slate-600 uppercase text-[10px] font-extrabold border-b border-slate-200">
                     <tr>
-                      <th className="py-3.5 px-4">User Account</th>
-                      <th className="py-3.5 px-4">Maintenance Plan</th>
-                      <th className="py-3.5 px-4">Identity-Bound Storage</th>
-                      <th className="py-3.5 px-4">Files Processed</th>
-                      <th className="py-3.5 px-4">Account Status</th>
-                      <th className="py-3.5 px-4 text-right">Access Control</th>
+                      <th className="py-3.5 px-4">User</th>
+                      <th className="py-3.5 px-4">Plan</th>
+                      <th className="py-3.5 px-4">Bound Storage</th>
+                      <th className="py-3.5 px-4">Sorted</th>
+                      <th className="py-3.5 px-4">Status</th>
+                      <th className="py-3.5 px-4 text-right">Action</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-white/5 text-slate-200">
+                  <tbody className="divide-y divide-slate-200/60">
                     {adminData.users.map((u) => (
-                      <tr key={u.id} className="hover:bg-white/[0.02]">
-                        <td className="py-3.5 px-4">
-                          <p className="font-bold text-white">{u.name}</p>
-                          <p className="text-[11px] text-slate-400">{u.email}</p>
-                        </td>
-                        <td className="py-3.5 px-4">
-                          {u.role === "ADMIN" ? (
-                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300">
-                              PROJECT CREATOR
-                            </span>
-                          ) : (
-                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                              u.subscription_plan !== "Free"
-                                ? "bg-blue-500/20 text-blue-300"
-                                : "bg-white/5 text-slate-400"
-                            }`}>
-                              {u.subscription_plan}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3.5 px-4 text-slate-300">
-                          {u.role === "ADMIN" ? "Operations Console" : u.cloud_provider}
-                        </td>
-                        <td className="py-3.5 px-4">
-                          {u.role === "ADMIN" ? (
-                            <span className="text-slate-500 italic">—</span>
-                          ) : (
-                            <span>{u.total_classified} files ({u.storage_kb} KB)</span>
-                          )}
-                        </td>
-                        <td className="py-3.5 px-4">
-                          <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                            u.status === "Suspended"
-                              ? "bg-red-500/20 text-red-300"
-                              : "bg-emerald-500/20 text-emerald-300"
-                          }`}>
-                            {u.status}
-                          </span>
-                        </td>
+                      <tr key={u.id}>
+                        <td className="py-3.5 px-4 font-bold text-slate-900">{u.name} ({u.email})</td>
+                        <td className="py-3.5 px-4 text-violet-700 font-bold">{u.subscription_plan}</td>
+                        <td className="py-3.5 px-4 text-slate-600">{u.cloud_provider}</td>
+                        <td className="py-3.5 px-4 font-semibold">{u.total_classified} files ({u.storage_kb} KB)</td>
+                        <td className="py-3.5 px-4 font-bold">{u.status}</td>
                         <td className="py-3.5 px-4 text-right">
-                          {u.email.toLowerCase() !== CREATOR_EMAIL.toLowerCase() ? (
+                          {u.email.toLowerCase() !== CREATOR_EMAIL.toLowerCase() && (
                             <button
                               onClick={() => handleToggleUserStatus(u)}
-                              className={`px-3 py-1.5 rounded-xl text-[11px] font-bold transition ${
-                                u.status === "Suspended"
-                                  ? "bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300"
-                                  : "bg-red-500/20 hover:bg-red-500/30 text-red-300"
-                              }`}
+                              className="neo-btn px-3 py-1 rounded-xl text-[11px] font-bold text-pink-600"
                             >
-                              {u.status === "Suspended" ? "Activate User" : "Suspend User"}
+                              {u.status === "Suspended" ? "Activate" : "Suspend"}
                             </button>
-                          ) : (
-                            <span className="text-[11px] text-amber-400 font-bold">Creator Account</span>
                           )}
                         </td>
                       </tr>
@@ -1632,52 +1350,43 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* CREATOR TAB 4: SECURITY & SYSTEM AUDIT LOGS */}
-          {creatorTab === "audit" && (
-            <div className="mt-6">
-              <div className="rounded-2xl border border-white/10 bg-[#151d2c] overflow-hidden">
+            {creatorTab === "audit" && (
+              <div className="neo-glass rounded-3xl overflow-hidden gsap-3d-item">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-900/90 text-slate-400 uppercase text-[10px] border-b border-white/10">
+                  <thead className="bg-violet-50/70 text-slate-600 uppercase text-[10px] font-extrabold border-b border-slate-200">
                     <tr>
                       <th className="py-3.5 px-4">Timestamp</th>
-                      <th className="py-3.5 px-4">Actor</th>
-                      <th className="py-3.5 px-4">Event Type</th>
-                      <th className="py-3.5 px-4">Execution Metadata</th>
+                      <th className="py-3.5 px-4">User</th>
+                      <th className="py-3.5 px-4">Action</th>
+                      <th className="py-3.5 px-4">Metadata</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-white/5 text-slate-300">
+                  <tbody className="divide-y divide-slate-200/60">
                     {activity.map((act) => (
-                      <tr key={act.id} className="hover:bg-white/[0.02]">
-                        <td className="py-3 px-4 font-mono text-xs whitespace-nowrap">
-                          {formatTimestamp(act.timestamp)}
-                        </td>
-                        <td className="py-3 px-4 font-semibold text-white">{act.username}</td>
-                        <td className="py-3 px-4 text-amber-400 font-semibold">{act.action}</td>
-                        <td className="py-3 px-4 text-slate-400 italic">{act.details}</td>
+                      <tr key={act.id}>
+                        <td className="py-3 px-4 font-mono text-slate-600">{formatTimestamp(act.timestamp)}</td>
+                        <td className="py-3 px-4 font-bold text-slate-900">{act.username}</td>
+                        <td className="py-3 px-4 font-bold text-violet-600">{act.action}</td>
+                        <td className="py-3 px-4 text-slate-600 italic">{act.details}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </main>
       </div>
     );
   }
 
   // =========================================================
-  // VIEW 2B: STANDARD USER WORKSPACE (GOOGLE DRIVE INTERFACE)
+  // VIEW 2B: BRIGHT GEN-Z 3D NEO-GLASS USER WORKSPACE
   // =========================================================
   const allCategoryOptions = Array.from(
-    new Set([
-      ...STANDARD_CATEGORIES,
-      ...customCategories,
-      ...Object.keys(summary.category_counts || {})
-    ])
+    new Set([...STANDARD_CATEGORIES, ...customCategories, ...Object.keys(summary.category_counts || {})])
   );
 
   const folderEntries = Array.from(
@@ -1702,1257 +1411,714 @@ export default function App() {
 
   const quotaMb = summary.storage_limit_mb || 100;
   const usedMb = summary.total_storage_mb || 0;
-  const storagePercent = usedMb > 0 ? Math.max(Math.min(Math.round((usedMb / quotaMb) * 100), 100), 2) : 0;
+  const storagePercent = usedMb > 0 ? Math.max(Math.min(Math.round((usedMb / quotaMb) * 100), 100), 3) : 2;
   const quotaDisplayLabel = summary.cloud_linked
     ? `${usedMb} MB of ${(quotaMb / 1024).toFixed(0)} GB used (${summary.cloud_email})`
     : `${usedMb} MB of 100 MB used`;
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#131314] text-slate-100 font-sans">
-      
-      {/* 1. USER GOOGLE DRIVE STYLE SIDEBAR */}
-      <aside className="w-64 border-r border-white/10 bg-[#1e1f20] flex flex-col justify-between py-5 px-3 shrink-0 select-none overflow-y-auto">
+    <div className="relative flex h-screen w-screen overflow-hidden text-slate-900">
+      <Interactive3DBackground accent="violet" />
+
+      {/* 1. 3D FLOATING DAYLIGHT NEO-GLASS SIDEBAR */}
+      <aside className="relative z-10 w-64 m-3 rounded-3xl neo-glass flex flex-col justify-between py-5 px-3.5 shrink-0 select-none overflow-y-auto">
         <div>
-          <div className="flex items-center justify-between px-4 pb-4 mb-2 border-b border-white/10">
-            <div className="overflow-hidden">
-              <h1 className="text-lg font-medium tracking-tight text-slate-100 flex items-center gap-2">
-                <span>SmartSorter</span>
-                {summary.subscription_plan !== "Free" && (
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-semibold">
-                    PRO
-                  </span>
-                )}
-              </h1>
-              <p className="text-[11px] text-slate-400 truncate">
-                {summary.cloud_linked ? `🔒 Bound: ${currentUser.email}` : "100 MB Free Workspace"}
-              </p>
-            </div>
+          <div className="px-3 pb-4 mb-3 border-b border-slate-200/80">
+            <h1 className="text-lg font-extrabold tracking-tight bg-gradient-to-r from-violet-700 via-fuchsia-600 to-orange-500 bg-clip-text text-transparent flex items-center gap-2">
+              <span>SmartSorter 3D</span>
+              {summary.subscription_plan !== "Free" && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-fuchsia-100 text-fuchsia-700 font-extrabold">
+                  PRO
+                </span>
+              )}
+            </h1>
+            <p className="text-[11px] font-medium text-slate-500 truncate mt-0.5">
+              {summary.cloud_linked ? `🔒 Bound: ${currentUser.email}` : "100 MB Free Workspace"}
+            </p>
           </div>
 
-          <nav className="space-y-0.5">
-            <button
-              onClick={() => setActiveTab("library")}
-              className={`w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-sm font-medium transition ${
-                activeTab === "library"
-                  ? "bg-[#004a77] text-[#c2e7ff]"
-                  : "text-slate-200 hover:bg-white/5"
-              }`}
-            >
-              <Folder className="w-4 h-4 shrink-0" />
-              <span>Files & Folders</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab("recent")}
-              className={`w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-sm font-medium transition ${
-                activeTab === "recent"
-                  ? "bg-[#004a77] text-[#c2e7ff]"
-                  : "text-slate-200 hover:bg-white/5"
-              }`}
-            >
-              <Clock className="w-4 h-4 shrink-0" />
-              <span>Recent</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab("uploads")}
-              className={`w-full flex items-center justify-between px-4 py-2.5 rounded-full text-sm font-medium transition ${
-                activeTab === "uploads"
-                  ? "bg-[#004a77] text-[#c2e7ff]"
-                  : "text-slate-200 hover:bg-white/5"
-              }`}
-            >
-              <div className="flex items-center gap-4">
-                <Upload className="w-4 h-4 shrink-0" />
-                <span>Uploads</span>
-              </div>
-              <span className="text-[11px] text-slate-400">{summary.active_files_count}</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab("offline")}
-              className={`w-full flex items-center justify-between px-4 py-2.5 rounded-full text-sm font-medium transition ${
-                activeTab === "offline"
-                  ? "bg-[#004a77] text-[#c2e7ff]"
-                  : "text-slate-200 hover:bg-white/5"
-              }`}
-            >
-              <div className="flex items-center gap-4">
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <span>Offline</span>
-              </div>
-              {summary.offline_files_count > 0 && (
-                <span className="text-[11px] px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300">
-                  {summary.offline_files_count}
-                </span>
-              )}
-            </button>
-
-            <button
-              onClick={() => setActiveTab("bin")}
-              className={`w-full flex items-center justify-between px-4 py-2.5 rounded-full text-sm font-medium transition ${
-                activeTab === "bin"
-                  ? "bg-[#004a77] text-[#c2e7ff]"
-                  : "text-slate-200 hover:bg-white/5"
-              }`}
-            >
-              <div className="flex items-center gap-4">
-                <Trash2 className="w-4 h-4 shrink-0" />
-                <span>Bin</span>
-              </div>
-              {summary.bin_files_count > 0 && (
-                <span className="text-[11px] text-slate-400">{summary.bin_files_count}</span>
-              )}
-            </button>
-
-            <button
-              onClick={() => setActiveTab("spam")}
-              className={`w-full flex items-center justify-between px-4 py-2.5 rounded-full text-sm font-medium transition ${
-                activeTab === "spam"
-                  ? "bg-[#004a77] text-[#c2e7ff]"
-                  : "text-slate-200 hover:bg-white/5"
-              }`}
-            >
-              <div className="flex items-center gap-4">
-                <AlertOctagon className="w-4 h-4 shrink-0" />
-                <span>Spam</span>
-              </div>
-              {summary.spam_files_count > 0 && (
-                <span className="text-[11px] px-1.5 rounded-full bg-red-500/20 text-red-300">
-                  {summary.spam_files_count}
-                </span>
-              )}
-            </button>
-
-            <button
-              onClick={() => setActiveTab("settings")}
-              className={`w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-sm font-medium transition ${
-                activeTab === "settings"
-                  ? "bg-[#004a77] text-[#c2e7ff]"
-                  : "text-slate-200 hover:bg-white/5"
-              }`}
-            >
-              <Settings className="w-4 h-4 shrink-0" />
-              <span>Settings</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab("help")}
-              className={`w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-sm font-medium transition ${
-                activeTab === "help"
-                  ? "bg-[#004a77] text-[#c2e7ff]"
-                  : "text-slate-200 hover:bg-white/5"
-              }`}
-            >
-              <HelpCircle className="w-4 h-4 shrink-0" />
-              <span>Help and feedback</span>
-            </button>
-
-            <div className="pt-2">
-              <button
-                onClick={() => setActiveTab("storage")}
-                className={`w-full flex items-center gap-4 px-4 py-2.5 rounded-full text-sm font-medium transition ${
-                  activeTab === "storage"
-                    ? "bg-[#004a77] text-[#c2e7ff]"
-                    : "text-slate-200 hover:bg-white/5"
-                }`}
-              >
-                <Cloud className="w-4 h-4 shrink-0" />
-                <span>Storage</span>
-              </button>
-
-              <div className="px-4 pt-2 pb-3">
-                <div className="w-full h-1 bg-slate-700 rounded-full overflow-hidden mb-2.5">
-                  <div
-                    className="h-full bg-[#8ab4f8] rounded-full transition-all duration-300"
-                    style={{ width: `${storagePercent}%` }}
-                  />
-                </div>
-
-                <p className="text-xs text-slate-300 mb-1 truncate" title={quotaDisplayLabel}>
-                  {quotaDisplayLabel}
-                </p>
-                <p className="text-[10px] text-slate-500 mb-3">
-                  {summary.total_storage_kb} KB active ({summary.active_files_count} files)
-                </p>
-
+          <nav className="space-y-1">
+            {[
+              { id: "library", label: "Files & Folders", icon: Folder },
+              { id: "recent", label: "Recent", icon: Clock },
+              { id: "uploads", label: "Uploads", icon: Upload, count: summary.active_files_count },
+              { id: "offline", label: "Offline", icon: CheckCircle2, count: summary.offline_files_count },
+              { id: "bin", label: "Bin", icon: Trash2, count: summary.bin_files_count },
+              { id: "spam", label: "Spam", icon: AlertOctagon, count: summary.spam_files_count },
+              { id: "settings", label: "Settings", icon: Settings },
+              { id: "help", label: "Help and feedback", icon: HelpCircle },
+              { id: "storage", label: "Storage", icon: Cloud }
+            ].map((item) => {
+              const IconComp = item.icon;
+              const isAct = activeTab === item.id;
+              return (
                 <button
-                  type="button"
-                  onClick={() => setCloudModalOpen(true)}
-                  className="px-4 py-2 rounded-full border border-slate-500/80 hover:bg-white/5 text-xs font-medium text-[#8ab4f8] transition"
+                  key={item.id}
+                  onClick={() => setActiveTab(item.id)}
+                  className={`w-full flex items-center justify-between px-4 py-2.5 rounded-2xl text-xs font-bold transition ${
+                    isAct ? "neo-btn-active" : "text-slate-700 hover:bg-violet-500/10 hover:text-violet-700"
+                  }`}
                 >
-                  {summary.cloud_linked ? "Manage Gmail Drive" : "Link My Gmail Drive"}
+                  <div className="flex items-center gap-3.5">
+                    <IconComp className={`w-4 h-4 ${isAct ? "text-white" : "text-violet-600"}`} />
+                    <span>{item.label}</span>
+                  </div>
+                  {item.count > 0 && (
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-extrabold ${
+                      isAct ? "bg-white/25 text-white" : "bg-violet-100 text-violet-700"
+                    }`}>
+                      {item.count}
+                    </span>
+                  )}
                 </button>
+              );
+            })}
+
+            {/* Tactile Daylight Neomorphic Storage Meter */}
+            <div className="px-3 pt-3 pb-2">
+              <div className="w-full h-2.5 neo-recessed rounded-full overflow-hidden mb-2">
+                <div
+                  className="h-full bg-gradient-to-r from-violet-600 via-pink-500 to-orange-400 rounded-full transition-all duration-500"
+                  style={{ width: `${storagePercent}%` }}
+                />
               </div>
+              <p className="text-[11px] font-bold text-slate-700 truncate">{quotaDisplayLabel}</p>
+              <p className="text-[10px] font-medium text-slate-500 mb-3">{summary.total_storage_kb} KB active</p>
+              <MagneticButton
+                onClick={() => setCloudModalOpen(true)}
+                className="w-full py-2 rounded-2xl neo-btn text-xs font-extrabold text-violet-700 hover:text-pink-600"
+              >
+                {summary.cloud_linked ? "Manage Gmail Drive" : "Link My Gmail Drive"}
+              </MagneticButton>
             </div>
           </nav>
         </div>
 
-        <div className="mt-4 mx-2 flex items-center justify-between p-2.5 rounded-2xl bg-white/[0.03] border border-white/5">
+        <div className="mt-3 flex items-center justify-between p-2.5 rounded-2xl neo-recessed">
           <div className="flex items-center gap-2.5 overflow-hidden">
-            <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs uppercase shrink-0">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-violet-600 via-fuchsia-500 to-orange-400 text-white flex items-center justify-center font-extrabold text-xs shrink-0 shadow-sm">
               {currentUser.name ? currentUser.name[0] : "U"}
             </div>
             <div className="overflow-hidden">
-              <p className="text-xs font-semibold truncate">{currentUser.name}</p>
-              <p className="text-[10px] text-slate-400 truncate" title={currentUser.email}>
-                {currentUser.email}
-              </p>
+              <p className="text-xs font-extrabold text-slate-900 truncate">{currentUser.name}</p>
+              <p className="text-[10px] font-medium text-slate-500 truncate">{currentUser.email}</p>
             </div>
           </div>
-          <button 
-            onClick={handleSignOut}
-            title="Sign Out"
-            className="text-slate-400 hover:text-red-400 p-1.5 rounded-lg hover:bg-white/5 transition"
-          >
+          <button onClick={handleSignOut} title="Sign Out" className="text-slate-500 hover:text-rose-600 p-1.5">
             <LogOut className="w-4 h-4" />
           </button>
         </div>
       </aside>
 
-      {/* 2. USER CENTER WORKSPACE CANVAS */}
-      <main className="flex-1 flex flex-col overflow-y-auto px-8 py-6">
-        <header className="flex items-center justify-between pb-5 border-b border-white/10 gap-4">
-          <div className="relative flex-1 max-w-md">
-            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search in SmartSorter & Linked Drive..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-[#1e1f20] border border-white/10 rounded-full pl-10 pr-4 py-2 text-xs text-slate-200 placeholder-slate-400 focus:outline-none focus:border-[#8ab4f8] transition"
-            />
-          </div>
-
-          <div className="flex items-center gap-2.5">
-            {summary.cloud_linked && (
-              <button
-                onClick={handleSyncCloudDrive}
-                disabled={isSyncingCloud}
-                className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 rounded-full text-xs font-semibold border border-emerald-500/30 transition"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? "animate-spin" : ""}`} />
-                <span>{isSyncingCloud ? "Sorting Drive..." : `Sync My Drive`}</span>
-              </button>
-            )}
-
-            {summary.active_files_count > 0 && (
-              <button
-                onClick={() => setFolderAiTarget(selectedFolder)}
-                className="flex items-center gap-1.5 px-3.5 py-2 bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 rounded-full text-xs font-semibold border border-purple-500/30 transition"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                <span>Ask Folder AI</span>
-              </button>
-            )}
-
-            <button
-              onClick={handleCreateCustomFolder}
-              className="flex items-center gap-1.5 px-3.5 py-2 bg-[#1e1f20] hover:bg-white/10 text-slate-200 rounded-full text-xs font-semibold border border-white/10 transition"
-            >
-              <Plus className="w-3.5 h-3.5 text-emerald-400" />
-              <span>New Folder</span>
-            </button>
-
-            <button
-              onClick={() => setUploadModalOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-[#8ab4f8] hover:bg-blue-400 text-slate-950 rounded-full text-xs font-bold shadow-lg transition active:scale-95"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Upload / Sort</span>
-            </button>
-          </div>
-        </header>
-
-        {uploadNotice && (
-          <div className="mt-4 flex items-center justify-between rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-2.5 text-xs text-blue-300">
-            <span className="truncate">{uploadNotice}</span>
-            <button onClick={() => setUploadNotice("")} className="text-slate-400 hover:text-white ml-3">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-
-        {/* VIEWS: FILES & FOLDERS / RECENT / OFFLINE */}
-        {(activeTab === "library" || activeTab === "recent" || activeTab === "offline") && (
-          <div className="mt-6">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="text-xl font-bold tracking-tight">
-                  {activeTab === "library" && "Files & Smart Folders"}
-                  {activeTab === "recent" && "Recent Activity & Files"}
-                  {activeTab === "offline" && "Offline Available Files"}
-                </h2>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  {activeTab === "library" && `Isolated workspace for ${currentUser.email} (${quotaDisplayLabel})`}
-                  {activeTab === "recent" && "Chronological stream of your most recently processed files"}
-                  {activeTab === "offline" && "Pinned documents cached for instant offline access"}
-                </p>
-              </div>
-
-              <div className="flex items-center gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setStarredOnly(!starredOnly)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition ${
-                    starredOnly
-                      ? "bg-amber-500/20 border-amber-500/40 text-amber-300"
-                      : "bg-[#1e1f20] border-white/10 text-slate-400 hover:text-white"
-                  }`}
-                >
-                  <Star className={`w-3.5 h-3.5 ${starredOnly ? "fill-amber-400 text-amber-400" : ""}`} />
-                  <span>Starred</span>
-                </button>
-
-                <select
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value)}
-                  className="bg-[#1e1f20] border border-white/10 rounded-full px-3 py-1.5 text-xs text-slate-200 focus:outline-none"
-                >
-                  <option value="starred">Sort: Starred First</option>
-                  <option value="newest">Sort: Recent First</option>
-                  <option value="size">Sort: Size (KB)</option>
-                  <option value="name">Sort: Name (A–Z)</option>
-                </select>
-              </div>
+      {/* 2. LENIS SMOOTH-SCROLL 3D WORKSPACE CANVAS */}
+      <main ref={mainScrollRef} className="relative z-10 flex-1 overflow-y-auto p-6">
+        <div ref={cascadeContainerRef} className="space-y-6">
+          {/* Top Command Bar */}
+          <header className="neo-glass rounded-3xl p-4 flex flex-wrap items-center justify-between gap-4">
+            <div className="relative flex-1 max-w-md">
+              <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-violet-600" />
+              <input
+                type="text"
+                placeholder="Search filenames, categories, or AI summaries..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full neo-recessed rounded-2xl pl-11 pr-4 py-2.5 text-xs font-medium text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-400"
+              />
             </div>
 
-            {activeTab === "library" && (
-              <div className="mb-8">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Smart Folders</h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
-                  {folderEntries.length > 0 ? (
-                    folderEntries.map(([cat, count]) => (
-                      <div
-                        key={cat}
-                        onClick={() => setSelectedFolder(selectedFolder === cat ? "All" : cat)}
-                        className={`border rounded-2xl p-3.5 flex items-center justify-between transition cursor-pointer group ${
-                          selectedFolder === cat 
-                            ? "bg-[#004a77]/60 border-[#8ab4f8]/60" 
-                            : "bg-[#1e1f20] border-white/5 hover:border-white/20"
-                        }`}
-                      >
-                        <div className="flex items-center gap-2.5 overflow-hidden">
-                          <Folder className="w-4 h-4 text-[#8ab4f8] shrink-0" />
-                          <span className="text-xs font-semibold text-slate-200 truncate">{cat}</span>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          {count > 0 && (
-                            <>
-                              <button
-                                type="button"
-                                onClick={(e) => { e.stopPropagation(); setFolderAiTarget(cat); }}
-                                title={`Synthesize '${cat}'`}
-                                className="p-1 rounded-lg bg-purple-500/15 hover:bg-purple-500/35 text-purple-300 transition"
-                              >
-                                <Sparkles className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(e) => handleExportFolderZip(cat, e)}
-                                title={`Download '${cat}' as ZIP`}
-                                className="p-1 rounded-lg bg-white/5 hover:bg-white/15 text-slate-300 transition"
-                              >
-                                <Download className="w-3.5 h-3.5" />
-                              </button>
-                            </>
-                          )}
-                          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-white/10 text-slate-300">
-                            {count}
-                          </span>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-xs text-slate-500 italic col-span-4">Upload documents or sync your personal Gmail Drive to generate smart folders.</p>
-                  )}
-                </div>
-              </div>
-            )}
+            <div className="flex items-center gap-2.5">
+              {summary.cloud_linked && (
+                <MagneticButton
+                  onClick={handleSyncCloudDrive}
+                  disabled={isSyncingCloud}
+                  className="neo-btn px-4 py-2.5 rounded-2xl text-xs font-extrabold text-emerald-600 flex items-center gap-1.5"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? "animate-spin" : ""}`} />
+                  <span>{isSyncingCloud ? "Sorting..." : "Sync My Drive"}</span>
+                </MagneticButton>
+              )}
 
-            <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">
-                {activeTab === "offline" ? "Offline Cached Files" : "Sorted Files"} ({displayedDocs.length})
-              </h3>
-              {displayedDocs.length > 0 ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3.5">
-                  {displayedDocs.map((doc) => (
-                    <div
-                      key={doc.id}
-                      onClick={() => setPreviewDoc(doc)}
-                      className={`bg-[#1e1f20] border rounded-2xl p-4 flex flex-col items-center text-center transition group hover:-translate-y-1 shadow-sm relative cursor-pointer ${
-                        doc.is_starred ? "border-amber-500/40" : "border-white/5 hover:border-[#8ab4f8]/50"
-                      }`}
-                    >
-                      <div className="absolute top-2.5 left-2.5 flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={(e) => handleToggleStar(doc.id, e)}
-                          title="Star File"
-                          className="p-1 rounded-lg hover:bg-white/10 transition"
-                        >
-                          <Star
-                            className={`w-3.5 h-3.5 ${
-                              doc.is_starred ? "fill-amber-400 text-amber-400" : "text-slate-500"
-                            }`}
-                          />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => handleToggleOffline(doc.id, e)}
-                          title={doc.is_offline ? "Available Offline" : "Make Available Offline"}
-                          className="p-1 rounded-lg hover:bg-white/10 transition"
-                        >
-                          <CheckCircle2
-                            className={`w-3.5 h-3.5 ${
-                              doc.is_offline ? "text-emerald-400" : "text-slate-600"
-                            }`}
-                          />
-                        </button>
-                      </div>
+              {summary.active_files_count > 0 && (
+                <MagneticButton
+                  onClick={() => setFolderAiTarget(selectedFolder)}
+                  className="neo-btn px-4 py-2.5 rounded-2xl text-xs font-extrabold text-violet-700 flex items-center gap-1.5"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-pink-500" />
+                  <span>Ask Folder AI</span>
+                </MagneticButton>
+              )}
 
-                      <div className="absolute top-2.5 right-2.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
-                        <button
-                          type="button"
-                          onClick={(e) => handleShareDocument(doc.id, e)}
-                          title="Copy Share Link"
-                          className="p-1.5 rounded-lg bg-slate-900/90 hover:bg-purple-600 text-slate-300 hover:text-white border border-white/10"
-                        >
-                          <Share2 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); handleDeleteSingle(doc.id, doc.filename, false); }}
-                          title="Move to Bin"
-                          className="p-1.5 rounded-lg bg-slate-900/90 hover:bg-red-600 text-slate-300 hover:text-white border border-white/10"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+              <MagneticButton
+                onClick={handleCreateCustomFolder}
+                className="neo-btn px-4 py-2.5 rounded-2xl text-xs font-extrabold text-slate-700 flex items-center gap-1.5"
+              >
+                <Plus className="w-3.5 h-3.5 text-emerald-500" />
+                <span>New Folder</span>
+              </MagneticButton>
 
-                      <div className="w-12 h-12 rounded-2xl bg-white/[0.04] border border-white/5 flex items-center justify-center mb-3 mt-3 group-hover:scale-105 transition">
-                        {getFileIcon(doc.filename)}
-                      </div>
-                      <p className="text-xs font-semibold text-slate-200 w-full truncate mb-1" title={doc.filename}>
-                        {doc.filename}
-                      </p>
-                      <div className="flex items-center justify-center gap-1.5 text-[10px] text-[#8ab4f8] font-medium mb-1">
-                        <span>{doc.category}</span>
-                        <span>•</span>
-                        <span>{doc.size_kb} KB</span>
-                      </div>
-                      <span className="text-[9px] px-2 py-0.5 rounded-full bg-white/5 text-slate-400 mb-1 truncate max-w-full">
-                        {doc.storage_source}
-                      </span>
-                      {doc.summary && (
-                        <p className="text-[10px] text-slate-400 line-clamp-2 leading-relaxed mt-0.5">
-                          {doc.summary}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="border border-dashed border-white/10 rounded-2xl p-12 text-center">
-                  <UploadCloud className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-                  <p className="text-sm text-slate-400 font-medium">
-                    {activeTab === "offline"
-                      ? "No files marked for Offline access yet. Click the checkmark icon on any file card!"
-                      : "No documents uploaded in your account yet."}
+              <MagneticButton
+                onClick={() => setUploadModalOpen(true)}
+                className="neo-btn-active px-5 py-2.5 rounded-2xl text-xs font-extrabold flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Upload / Sort</span>
+              </MagneticButton>
+            </div>
+          </header>
+
+          {uploadNotice && (
+            <div className="neo-glass rounded-2xl px-4 py-3 text-xs font-bold text-violet-700 flex items-center justify-between">
+              <span>{uploadNotice}</span>
+              <button onClick={() => setUploadNotice("")}><X className="w-4 h-4" /></button>
+            </div>
+          )}
+
+          {/* VIEWS: FILES & FOLDERS / RECENT / OFFLINE */}
+          {(activeTab === "library" || activeTab === "recent" || activeTab === "offline") && (
+            <div className="space-y-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-extrabold tracking-tight bg-gradient-to-r from-slate-900 via-violet-800 to-pink-600 bg-clip-text text-transparent">
+                    {activeTab === "library" && "3D Smart Folders & Multimodal Library"}
+                    {activeTab === "recent" && "Recent Activity Stream"}
+                    {activeTab === "offline" && "Offline Pinned Vault"}
+                  </h2>
+                  <p className="text-xs font-medium text-slate-500">
+                    Isolated workspace for {currentUser.email} • Hover any card for 3D perspective tilt
                   </p>
                 </div>
-              )}
-            </div>
-          </div>
-        )}
 
-        {/* VIEW: UPLOADS */}
-        {activeTab === "uploads" && (
-          <div className="mt-6 space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold tracking-tight">Uploads & Personal Drive Sync</h2>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Upload local files (100 MB Free Quota) or sync directly from your verified login Gmail Drive ({currentUser.email})
-                </p>
-              </div>
-              <div className="flex gap-2.5">
-                {summary.cloud_linked ? (
-                  <button
-                    onClick={handleSyncCloudDrive}
-                    disabled={isSyncingCloud}
-                    className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-full text-xs font-bold transition"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? "animate-spin" : ""}`} />
-                    <span>Sync {currentUser.email} Drive</span>
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => setCloudModalOpen(true)}
-                    className="flex items-center gap-2 px-4 py-2 bg-[#004a77] hover:bg-[#005a92] text-[#c2e7ff] rounded-full text-xs font-bold transition"
-                  >
-                    <Cloud className="w-3.5 h-3.5" />
-                    <span>Link {currentUser.email} Drive</span>
-                  </button>
-                )}
-                <button
-                  onClick={() => setUploadModalOpen(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-[#8ab4f8] text-slate-950 rounded-full text-xs font-bold"
-                >
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>New Upload Batch</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-white/10 bg-[#1e1f20] overflow-hidden">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-black/20 text-slate-400 uppercase text-[10px] tracking-wider border-b border-white/10">
-                  <tr>
-                    <th className="py-3 px-4">Filename & Summary</th>
-                    <th className="py-3 px-4">Sorted Folder</th>
-                    <th className="py-3 px-4">Storage Source</th>
-                    <th className="py-3 px-4">Size / SHA-256</th>
-                    <th className="py-3 px-4">Uploaded Time</th>
-                    <th className="py-3 px-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5 text-slate-300">
-                  {documents.length > 0 ? (
-                    documents.map((d) => (
-                      <tr key={d.id} className="hover:bg-white/[0.02]">
-                        <td className="py-3 px-4 max-w-xs">
-                          <p className="font-semibold text-slate-100 truncate">{d.filename}</p>
-                          <p className="text-[11px] text-slate-400 truncate">{d.summary}</p>
-                        </td>
-                        <td className="py-3 px-4">
-                          <select
-                            value={d.category}
-                            onChange={(e) => handleCategoryChange(d.id, e.target.value)}
-                            className="bg-[#131314] border border-white/10 rounded-lg px-2.5 py-1 text-xs text-[#8ab4f8] font-medium"
-                          >
-                            {allCategoryOptions.map((cOpt) => (
-                              <option key={cOpt} value={cOpt}>{cOpt}</option>
-                            ))}
-                            <option value="__NEW_CUSTOM__">+ Custom Folder...</option>
-                          </select>
-                        </td>
-                        <td className="py-3 px-4">
-                          <span className="px-2.5 py-1 rounded-full text-[10px] font-semibold bg-blue-500/15 text-blue-300">
-                            {d.storage_source}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 font-mono text-[11px]">
-                          {d.size_kb} KB {d.file_hash && <span className="text-slate-500">• #{d.file_hash}</span>}
-                        </td>
-                        <td className="py-3 px-4 text-slate-400">{formatTimestamp(d.created_at)}</td>
-                        <td className="py-3 px-4 text-right space-x-1.5">
-                          <button
-                            onClick={() => setPreviewDoc(d)}
-                            className="p-1.5 rounded-lg bg-white/5 hover:bg-blue-500/20 text-slate-300"
-                            title="Preview"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleToggleOffline(d.id)}
-                            className={`p-1.5 rounded-lg bg-white/5 ${d.is_offline ? "text-emerald-400" : "text-slate-400"}`}
-                            title="Toggle Offline"
-                          >
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleToggleSpam(d.id)}
-                            className="p-1.5 rounded-lg bg-white/5 hover:bg-amber-500/20 text-slate-400 hover:text-amber-300"
-                            title="Mark as Spam"
-                          >
-                            <AlertOctagon className="w-3.5 h-3.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={6} className="py-8 text-center text-slate-500 italic">No uploads recorded yet.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* VIEW: BIN */}
-        {activeTab === "bin" && (
-          <div className="mt-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold tracking-tight">Bin</h2>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Restore soft-deleted files to your workspace or permanently wipe them
-                </p>
-              </div>
-              {documents.length > 0 && (
-                <button
-                  onClick={handleHardDeleteAll}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-red-500/15 hover:bg-red-500/25 text-red-300 rounded-full text-xs font-bold border border-red-500/30 transition"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>Empty Bin Permanently</span>
-                </button>
-              )}
-            </div>
-
-            <div className="rounded-2xl border border-white/10 bg-[#1e1f20] overflow-hidden">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-black/20 text-slate-400 uppercase text-[10px] border-b border-white/10">
-                  <tr>
-                    <th className="py-3 px-4">Filename</th>
-                    <th className="py-3 px-4">Original Folder</th>
-                    <th className="py-3 px-4">Size</th>
-                    <th className="py-3 px-4 text-right">Restore / Delete Forever</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {documents.length > 0 ? (
-                    documents.map((d) => (
-                      <tr key={d.id}>
-                        <td className="py-3 px-4 font-semibold text-slate-200">{d.filename}</td>
-                        <td className="py-3 px-4 text-slate-400">{d.category}</td>
-                        <td className="py-3 px-4 text-slate-400">{d.size_kb} KB</td>
-                        <td className="py-3 px-4 text-right space-x-2">
-                          <button
-                            onClick={() => handleRestoreSingle(d.id)}
-                            className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-semibold hover:bg-emerald-500/30"
-                          >
-                            Restore
-                          </button>
-                          <button
-                            onClick={() => handleDeleteSingle(d.id, d.filename, true)}
-                            className="px-3 py-1 rounded-full bg-red-500/20 text-red-300 text-xs font-semibold hover:bg-red-500/30"
-                          >
-                            Delete Forever
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={4} className="py-12 text-center text-slate-500 italic">Your Bin is empty.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* VIEW: SPAM */}
-        {activeTab === "spam" && (
-          <div className="mt-6 space-y-4">
-            <div>
-              <h2 className="text-xl font-bold tracking-tight">Spam & Duplicate Quarantine</h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                SHA-256 duplicate uploads and flagged files are automatically isolated here so they do not consume your quota
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-white/10 bg-[#1e1f20] overflow-hidden">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-black/20 text-slate-400 uppercase text-[10px] border-b border-white/10">
-                  <tr>
-                    <th className="py-3 px-4">Quarantined File</th>
-                    <th className="py-3 px-4">Reason / SHA-256 Detection</th>
-                    <th className="py-3 px-4">Size</th>
-                    <th className="py-3 px-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {documents.length > 0 ? (
-                    documents.map((d) => (
-                      <tr key={d.id}>
-                        <td className="py-3 px-4 font-semibold text-amber-300">{d.filename}</td>
-                        <td className="py-3 px-4 text-slate-400">{d.summary}</td>
-                        <td className="py-3 px-4 text-slate-400">{d.size_kb} KB</td>
-                        <td className="py-3 px-4 text-right space-x-2">
-                          <button
-                            onClick={() => handleToggleSpam(d.id)}
-                            className="px-3 py-1 rounded-full bg-blue-500/20 text-blue-300 text-xs font-semibold"
-                          >
-                            Not Spam (Restore)
-                          </button>
-                          <button
-                            onClick={() => handleDeleteSingle(d.id, d.filename, true)}
-                            className="px-3 py-1 rounded-full bg-red-500/20 text-red-300 text-xs font-semibold"
-                          >
-                            Purge
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={4} className="py-12 text-center text-slate-500 italic">
-                        No spam or duplicate files in quarantine.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* VIEW: STORAGE & IDENTITY-BOUND GMAIL DRIVE BRIDGE */}
-        {activeTab === "storage" && (
-          <div className="mt-6 space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold tracking-tight">Personal Storage & Identity-Bound Gmail Bridge</h2>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Every Free user receives an isolated 100 MB workspace. Link your login Gmail ({currentUser.email}) to sort directly inside your own Google Drive.
-                </p>
-              </div>
-              <button
-                onClick={() => setCloudModalOpen(true)}
-                className="px-4 py-2 rounded-full bg-[#8ab4f8] text-slate-950 text-xs font-bold"
-              >
-                {summary.cloud_linked ? "Manage Linked Drive" : `Link ${currentUser.email}`}
-              </button>
-            </div>
-
-            <div className="p-6 rounded-2xl bg-[#1e1f20] border border-white/10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-              <div className="space-y-2 flex-1">
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <Cloud className="w-6 h-6 text-[#8ab4f8]" />
-                  <span className="text-base font-bold">
-                    {summary.cloud_linked
-                      ? `${summary.cloud_provider} Bound to ${currentUser.email}`
-                      : `Local 100 MB Quota (${currentUser.email})`}
-                  </span>
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/20 text-blue-300">
-                    Plan: {summary.subscription_plan}
-                  </span>
-                  {summary.cloud_linked && summary.drive_binding_hash && (
-                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                      🔒 Binding #{summary.drive_binding_hash}
-                    </span>
-                  )}
-                </div>
-
-                <p className="text-xs text-slate-400">
-                  {summary.cloud_linked
-                    ? `Security Verified: Only your login account (${currentUser.email}) is permitted to sync and sort files in this workspace.`
-                    : `You are currently using your isolated 100 MB Free Quota. Cross-account Gmail linking is strictly blocked for security.`}
-                </p>
-
-                <div className="pt-2 max-w-lg">
-                  <div className="flex justify-between text-xs mb-1.5">
-                    <span className="text-slate-300 font-medium">
-                      {quotaDisplayLabel} ({summary.total_storage_kb} KB calculated from {summary.active_files_count} files)
-                    </span>
-                    <span className="text-[#8ab4f8] font-bold">{storagePercent}%</span>
-                  </div>
-                  <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-[#8ab4f8] rounded-full transition-all duration-300"
-                      style={{ width: `${storagePercent}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {summary.cloud_linked && (
                 <div className="flex items-center gap-2.5">
                   <button
-                    onClick={handleSyncCloudDrive}
-                    disabled={isSyncingCloud}
-                    className="px-4 py-2 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold"
+                    onClick={() => setStarredOnly(!starredOnly)}
+                    className={`px-3.5 py-2 rounded-2xl text-xs font-bold flex items-center gap-1.5 ${
+                      starredOnly ? "neo-btn-active" : "neo-btn text-slate-700"
+                    }`}
                   >
-                    {isSyncingCloud ? "Sorting..." : "Sync & Sort My Drive"}
+                    <Star className={`w-3.5 h-3.5 ${starredOnly ? "fill-white text-white" : "text-amber-500"}`} />
+                    <span>Starred</span>
                   </button>
-                  <button
-                    onClick={handleUnlinkCloudDrive}
-                    className="px-4 py-2 rounded-full border border-red-500/40 text-red-300 text-xs font-semibold hover:bg-red-500/10"
+
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value)}
+                    className="neo-recessed rounded-2xl px-3.5 py-2 text-xs font-bold text-slate-700 focus:outline-none"
                   >
-                    Unlink
-                  </button>
+                    <option value="starred">Sort: Starred First</option>
+                    <option value="newest">Sort: Recent First</option>
+                    <option value="size">Sort: Size (KB)</option>
+                    <option value="name">Sort: Name (A–Z)</option>
+                  </select>
+                </div>
+              </div>
+
+              {activeTab === "library" && (
+                <div>
+                  <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500 mb-3">3D Smart Folders</h3>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    {folderEntries.length > 0 ? (
+                      folderEntries.map(([cat, count], idx) => {
+                        const pal = FOLDER_ACCENTS[idx % FOLDER_ACCENTS.length];
+                        return (
+                          <TiltSpotlightCard
+                            key={cat}
+                            maxTilt={12}
+                            glowColor={pal.glow}
+                            onClick={() => setSelectedFolder(selectedFolder === cat ? "All" : cat)}
+                            className={`rounded-2xl p-4 cursor-pointer gsap-3d-item ${
+                              selectedFolder === cat ? "ring-2 ring-violet-500" : ""
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2.5 overflow-hidden">
+                                <Folder className={`w-5 h-5 shrink-0 ${pal.icon}`} />
+                                <span className="text-xs font-extrabold text-slate-800 truncate">{cat}</span>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                {count > 0 && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => { e.stopPropagation(); setFolderAiTarget(cat); }}
+                                      className="p-1.5 rounded-xl neo-btn text-violet-600"
+                                      title="Synthesize Folder"
+                                    >
+                                      <Sparkles className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => handleExportFolderZip(cat, e)}
+                                      className="p-1.5 rounded-xl neo-btn text-pink-600"
+                                      title="Download ZIP"
+                                    >
+                                      <Download className="w-3.5 h-3.5" />
+                                    </button>
+                                  </>
+                                )}
+                                <span className={`text-[11px] font-extrabold px-2.5 py-0.5 rounded-full border ${pal.badge}`}>
+                                  {count}
+                                </span>
+                              </div>
+                            </div>
+                          </TiltSpotlightCard>
+                        );
+                      })
+                    ) : (
+                      <p className="text-xs text-slate-500 italic col-span-4">
+                        Upload documents or sync your Gmail Drive to generate 3D Smart Folders.
+                      </p>
+                    )}
+                  </div>
                 </div>
               )}
-            </div>
 
-            <div>
-              <h3 className="text-sm font-bold mb-3">Database & Personal Drive Bridge Maintenance Plans</h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="p-5 rounded-2xl bg-[#1e1f20] border border-white/10 flex flex-col justify-between">
-                  <div>
-                    <p className="text-xs font-bold uppercase text-slate-400">Starter Sandbox</p>
-                    <h4 className="text-xl font-bold mt-1">Free (100 MB)</h4>
-                    <p className="text-[11px] text-slate-400 mt-1">Isolated 100 MB per-user quota</p>
-                    <ul className="mt-4 space-y-2 text-xs text-slate-300">
-                      <li>✓ 100 MB isolated workspace storage</li>
-                      <li>✓ Extension & Gemini AI file sorting</li>
-                      <li>✗ Personal Gmail Drive auto-bridge</li>
-                      <li>✗ Automated Drive background sorting</li>
-                    </ul>
-                  </div>
-                  <button
-                    disabled={summary.subscription_plan === "Free"}
-                    onClick={() => handleActivateSubscription("Free")}
-                    className="mt-6 w-full py-2 rounded-full border border-white/15 text-xs font-semibold disabled:opacity-40"
-                  >
-                    {summary.subscription_plan === "Free" ? "Current Plan" : "Switch to Free (100 MB)"}
-                  </button>
-                </div>
+              <div>
+                <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500 mb-3">
+                  Sorted Documents ({displayedDocs.length})
+                </h3>
+                {displayedDocs.length > 0 ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                    {displayedDocs.map((doc, idx) => {
+                      const pal = FOLDER_ACCENTS[idx % FOLDER_ACCENTS.length];
+                      return (
+                        <TiltSpotlightCard
+                          key={doc.id}
+                          maxTilt={14}
+                          glowColor={pal.glow}
+                          onClick={() => setPreviewDoc(doc)}
+                          className="rounded-3xl p-4 cursor-pointer group gsap-3d-item"
+                        >
+                          <div className="flex flex-col items-center text-center relative">
+                            <div className="w-full flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleToggleStar(doc.id, e)}
+                                  className="p-1 rounded-lg hover:bg-violet-100"
+                                >
+                                  <Star className={`w-3.5 h-3.5 ${doc.is_starred ? "fill-amber-400 text-amber-500" : "text-slate-400"}`} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleToggleOffline(doc.id, e)}
+                                  className="p-1 rounded-lg hover:bg-emerald-100"
+                                >
+                                  <CheckCircle2 className={`w-3.5 h-3.5 ${doc.is_offline ? "text-emerald-600" : "text-slate-400"}`} />
+                                </button>
+                              </div>
+                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleShareDocument(doc.id, e)}
+                                  className="p-1.5 rounded-xl neo-btn text-violet-600"
+                                >
+                                  <Share2 className="w-3 h-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); handleDeleteSingle(doc.id, doc.filename, false); }}
+                                  className="p-1.5 rounded-xl neo-btn text-rose-600"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
 
-                <div className="p-5 rounded-2xl bg-[#1e1f20] border-2 border-[#8ab4f8] flex flex-col justify-between relative">
-                  <span className="absolute -top-2.5 right-4 px-2.5 py-0.5 rounded-full bg-[#8ab4f8] text-slate-950 text-[10px] font-bold">
-                    RECOMMENDED
-                  </span>
-                  <div>
-                    <p className="text-xs font-bold uppercase text-[#8ab4f8]">Cloud Bridge Pro</p>
-                    <h4 className="text-xl font-bold mt-1">₹199 / month</h4>
-                    <p className="text-[11px] text-slate-400 mt-1">Connect Your Registered Gmail Drive</p>
-                    <ul className="mt-4 space-y-2 text-xs text-slate-200">
-                      <li>✓ Strictly binds your login Gmail ({currentUser.email})</li>
-                      <li>✓ Sorts uploaded files directly in your personal Drive</li>
-                      <li>✓ Dynamic storage calculation upon login</li>
-                      <li>✓ Full SQLite WAL metadata & hash maintenance</li>
-                    </ul>
+                            <div className="w-14 h-14 rounded-2xl neo-recessed flex items-center justify-center mb-3">
+                              {getFileIcon(doc.filename)}
+                            </div>
+                            <p className="text-xs font-extrabold text-slate-900 w-full truncate mb-1" title={doc.filename}>
+                              {doc.filename}
+                            </p>
+                            <span className="text-[10px] text-violet-700 font-bold mb-1">
+                              {doc.category} • {doc.size_kb} KB
+                            </span>
+                            <span className="text-[9px] px-2.5 py-0.5 rounded-full neo-recessed text-slate-600 font-semibold mb-1.5 truncate max-w-full">
+                              {doc.storage_source}
+                            </span>
+                            {doc.summary && (
+                              <p className="text-[10px] text-slate-600 line-clamp-2 leading-relaxed">
+                                {doc.summary}
+                              </p>
+                            )}
+                          </div>
+                        </TiltSpotlightCard>
+                      );
+                    })}
                   </div>
-                  <button
-                    onClick={() => handleActivateSubscription("Cloud Bridge Pro")}
-                    className="mt-6 w-full py-2 rounded-full bg-[#8ab4f8] hover:bg-blue-400 text-slate-950 text-xs font-bold transition"
-                  >
-                    {summary.subscription_plan === "Cloud Bridge Pro" ? "✓ Active Plan" : "Subscribe & Unlock Gmail Bridge"}
-                  </button>
-                </div>
-
-                <div className="p-5 rounded-2xl bg-[#1e1f20] border border-purple-500/40 flex flex-col justify-between">
-                  <div>
-                    <p className="text-xs font-bold uppercase text-purple-400">Enterprise Auto-Sort</p>
-                    <h4 className="text-xl font-bold mt-1">₹499 / month</h4>
-                    <p className="text-[11px] text-slate-400 mt-1">High-Rate Multimodal AI + Priority SLA</p>
-                    <ul className="mt-4 space-y-2 text-xs text-slate-300">
-                      <li>✓ Cryptographic 1-to-1 Gmail Drive binding</li>
-                      <li>✓ Priority high-rate Gemini 2.5 Flash synthesis</li>
-                      <li>✓ Automated SHA-256 duplicate quarantine</li>
-                      <li>✓ Dedicated database maintenance & audit SLA</li>
-                    </ul>
+                ) : (
+                  <div className="neo-glass rounded-3xl p-12 text-center">
+                    <UploadCloud className="w-10 h-10 text-violet-500 mx-auto mb-3" />
+                    <p className="text-sm text-slate-700 font-bold">No documents in this view yet.</p>
                   </div>
-                  <button
-                    onClick={() => handleActivateSubscription("Enterprise Auto-Sort")}
-                    className="mt-6 w-full py-2 rounded-full bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition"
-                  >
-                    {summary.subscription_plan === "Enterprise Auto-Sort" ? "✓ Active Plan" : "Upgrade to Enterprise"}
-                  </button>
-                </div>
+                )}
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* VIEW: SETTINGS */}
-        {activeTab === "settings" && (
-          <div className="mt-6 max-w-2xl space-y-6">
-            <div>
-              <h2 className="text-xl font-bold tracking-tight">Settings & Security Policy</h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Configure SmartSorter extension rules and verify your account identity binding
-              </p>
-            </div>
-
-            <div className="p-5 rounded-2xl bg-[#1e1f20] border border-white/10 space-y-4">
+          {/* VIEW: UPLOADS / BIN / SPAM TABLES */}
+          {(activeTab === "uploads" || activeTab === "bin" || activeTab === "spam") && (
+            <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-semibold">Strict 1-to-1 Gmail-to-Drive Identity Lock</p>
-                  <p className="text-xs text-slate-400">
-                    Blocks linking any external Google Drive that does not match your login email ({currentUser.email})
-                  </p>
-                </div>
-                <span className="text-xs font-bold text-emerald-400">🔒 Enforced</span>
+                <h2 className="text-xl font-extrabold text-slate-900">
+                  {activeTab === "uploads" && "Uploads & Personal Gmail Drive Sync"}
+                  {activeTab === "bin" && "Recoverable Bin"}
+                  {activeTab === "spam" && "SHA-256 Duplicate & Spam Quarantine"}
+                </h2>
+                {activeTab === "bin" && documents.length > 0 && (
+                  <MagneticButton
+                    onClick={handleHardDeleteAll}
+                    className="neo-btn px-4 py-2 rounded-2xl text-xs font-bold text-rose-600"
+                  >
+                    Empty Bin Forever
+                  </MagneticButton>
+                )}
               </div>
 
-              <div className="flex items-center justify-between pt-3 border-t border-white/5">
-                <div>
-                  <p className="text-sm font-semibold">Auto-Sort Linked Drive by Extension & AI</p>
-                  <p className="text-xs text-slate-400">Automatically route PDFs, code, and images into Smart Folders</p>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={autoSortExt}
-                  onChange={(e) => setAutoSortExt(e.target.checked)}
-                  className="w-4 h-4 accent-[#8ab4f8]"
-                />
-              </div>
-
-              <div className="flex items-center justify-between pt-3 border-t border-white/5">
-                <div>
-                  <p className="text-sm font-semibold">Generate 1-Line Gemini AI Summaries</p>
-                  <p className="text-xs text-slate-400">Create concise content summaries for every ingested file</p>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={aiDeepSummary}
-                  onChange={(e) => setAiDeepSummary(e.target.checked)}
-                  className="w-4 h-4 accent-[#8ab4f8]"
-                />
+              <div className="neo-glass rounded-3xl overflow-hidden gsap-3d-item">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-violet-50/70 text-slate-600 uppercase text-[10px] font-extrabold border-b border-slate-200">
+                    <tr>
+                      <th className="py-3.5 px-4">Filename & AI Summary</th>
+                      <th className="py-3.5 px-4">Folder</th>
+                      <th className="py-3.5 px-4">Size / SHA-256</th>
+                      <th className="py-3.5 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200/60">
+                    {documents.length > 0 ? (
+                      documents.map((d) => (
+                        <tr key={d.id} className="hover:bg-violet-50/40">
+                          <td className="py-3.5 px-4 max-w-xs">
+                            <p className="font-extrabold text-slate-900 truncate">{d.filename}</p>
+                            <p className="text-[11px] text-slate-600 truncate">{d.summary}</p>
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <select
+                              value={d.category}
+                              onChange={(e) => handleCategoryChange(d.id, e.target.value)}
+                              className="neo-recessed rounded-xl px-2.5 py-1.5 text-xs font-bold text-violet-700"
+                            >
+                              {allCategoryOptions.map((cOpt) => (
+                                <option key={cOpt} value={cOpt}>{cOpt}</option>
+                              ))}
+                              <option value="__NEW_CUSTOM__">+ Custom Folder...</option>
+                            </select>
+                          </td>
+                          <td className="py-3.5 px-4 font-mono text-[11px] text-slate-700">
+                            {d.size_kb} KB {d.file_hash && <span className="text-slate-400">• #{d.file_hash}</span>}
+                          </td>
+                          <td className="py-3.5 px-4 text-right space-x-2">
+                            {activeTab === "bin" ? (
+                              <>
+                                <button onClick={() => handleRestoreSingle(d.id)} className="neo-btn px-3 py-1 rounded-xl text-emerald-600 font-bold">
+                                  Restore
+                                </button>
+                                <button onClick={() => handleDeleteSingle(d.id, d.filename, true)} className="neo-btn px-3 py-1 rounded-xl text-rose-600 font-bold">
+                                  Purge
+                                </button>
+                              </>
+                            ) : activeTab === "spam" ? (
+                              <>
+                                <button onClick={() => handleToggleSpam(d.id)} className="neo-btn px-3 py-1 rounded-xl text-violet-600 font-bold">
+                                  Not Spam
+                                </button>
+                                <button onClick={() => handleDeleteSingle(d.id, d.filename, true)} className="neo-btn px-3 py-1 rounded-xl text-rose-600 font-bold">
+                                  Purge
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button onClick={() => setPreviewDoc(d)} className="neo-btn p-1.5 rounded-xl text-violet-600">
+                                  <Eye className="w-3.5 h-3.5" />
+                                </button>
+                                <button onClick={() => handleToggleSpam(d.id)} className="neo-btn p-1.5 rounded-xl text-orange-500">
+                                  <AlertOctagon className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={4} className="py-10 text-center text-slate-500 italic">No files in this section.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* VIEW: HELP AND FEEDBACK (USERS SEE CREATOR REPLIES HERE) */}
-        {activeTab === "help" && (
-          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="p-6 rounded-2xl bg-[#1e1f20] border border-white/10 space-y-4">
-              <h3 className="text-base font-bold">Submit Support Request or Issue</h3>
-              <p className="text-xs text-slate-400">
-                Need help with your 100 MB quota, Cloud Bridge, or sorting rules? Submit a ticket directly to the Project Creator.
-              </p>
+          {/* VIEW: STORAGE & IDENTITY-BOUND GMAIL BRIDGE */}
+          {activeTab === "storage" && (
+            <div className="space-y-6">
+              <TiltSpotlightCard maxTilt={5} className="rounded-3xl p-6 gsap-3d-item">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2.5">
+                      <Cloud className="w-6 h-6 text-violet-600" />
+                      <h3 className="text-lg font-extrabold text-slate-900">
+                        {summary.cloud_linked
+                          ? `${summary.cloud_provider} Bound to ${currentUser.email}`
+                          : `Isolated 100 MB Free Quota (${currentUser.email})`}
+                      </h3>
+                      <span className="px-3 py-0.5 rounded-full text-xs font-extrabold bg-violet-100 text-violet-700">
+                        {summary.subscription_plan}
+                      </span>
+                    </div>
+                    <p className="text-xs font-medium text-slate-600">
+                      Strict 1-to-1 Gmail Security Lock: Only <strong>{currentUser.email}</strong> can be linked to this workspace.
+                    </p>
+                  </div>
+                  {summary.cloud_linked && (
+                    <MagneticButton onClick={handleUnlinkCloudDrive} className="neo-btn px-4 py-2 rounded-2xl text-xs font-bold text-rose-600">
+                      Unlink Drive
+                    </MagneticButton>
+                  )}
+                </div>
+              </TiltSpotlightCard>
 
-              <form onSubmit={handleSubmitFeedback} className="space-y-3">
-                <div>
-                  <label className="text-xs font-semibold text-slate-300">Issue Category</label>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                {[
+                  { name: "Free", price: "Free (100 MB)", desc: "Isolated 100 MB local quota", perks: ["100 MB isolated storage", "Gemini Flash sorting", "SHA-256 duplicate filter"] },
+                  { name: "Cloud Bridge Pro", price: "₹199 / month", desc: "Bind Your Login Gmail Drive", perks: ["Strictly binds " + currentUser.email, "Auto-sorts files in your Drive", "SQLite WAL index maintenance"] },
+                  { name: "Enterprise Auto-Sort", price: "₹499 / month", desc: "High-Rate Multimodal AI Bridge", perks: ["1-to-1 cryptographic Drive lock", "Priority Gemini 2.5 synthesis", "Dedicated audit & backup SLA"] }
+                ].map((tier) => (
+                  <TiltSpotlightCard key={tier.name} maxTilt={9} className="rounded-3xl p-6 flex flex-col justify-between gsap-3d-item">
+                    <div>
+                      <p className="text-xs font-extrabold uppercase text-pink-600">{tier.name}</p>
+                      <h4 className="text-2xl font-extrabold text-slate-900 mt-1">{tier.price}</h4>
+                      <p className="text-xs font-medium text-slate-500 mt-1">{tier.desc}</p>
+                      <ul className="mt-4 space-y-2 text-xs font-semibold text-slate-700">
+                        {tier.perks.map((p, i) => <li key={i}>✓ {p}</li>)}
+                      </ul>
+                    </div>
+                    <MagneticButton
+                      onClick={() => handleActivateSubscription(tier.name)}
+                      className="mt-6 w-full py-2.5 rounded-2xl neo-btn-active text-xs font-extrabold"
+                    >
+                      {summary.subscription_plan === tier.name ? "✓ Active Plan" : `Select ${tier.name}`}
+                    </MagneticButton>
+                  </TiltSpotlightCard>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* VIEW: SETTINGS */}
+          {activeTab === "settings" && (
+            <TiltSpotlightCard maxTilt={5} className="rounded-3xl p-6 max-w-2xl space-y-4 gsap-3d-item">
+              <h2 className="text-lg font-extrabold text-slate-900">Settings & Identity Security</h2>
+              <div className="neo-recessed p-4 rounded-2xl flex justify-between items-center text-xs font-semibold">
+                <span>Strict 1-to-1 Login Gmail Binding ({currentUser.email})</span>
+                <span className="text-emerald-600 font-extrabold">🔒 Enforced</span>
+              </div>
+              <div className="neo-recessed p-4 rounded-2xl flex justify-between items-center text-xs font-semibold">
+                <span>Auto-Sort Linked Drive by Extension & Gemini AI</span>
+                <input type="checkbox" checked={autoSortExt} onChange={(e) => setAutoSortExt(e.target.checked)} className="w-4 h-4 accent-violet-600" />
+              </div>
+              <div className="neo-recessed p-4 rounded-2xl flex justify-between items-center text-xs font-semibold">
+                <span>Generate 1-Line AI Summaries on Upload</span>
+                <input type="checkbox" checked={aiDeepSummary} onChange={(e) => setAiDeepSummary(e.target.checked)} className="w-4 h-4 accent-pink-600" />
+              </div>
+            </TiltSpotlightCard>
+          )}
+
+          {/* VIEW: HELP & FEEDBACK */}
+          {activeTab === "help" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <TiltSpotlightCard maxTilt={6} className="rounded-3xl p-6 space-y-4 gsap-3d-item">
+                <h3 className="text-base font-extrabold text-slate-900">Submit Issue to Project Creator</h3>
+                <form onSubmit={handleSubmitFeedback} className="space-y-3">
                   <select
                     value={fbCategory}
                     onChange={(e) => setFbCategory(e.target.value)}
-                    className="mt-1 w-full rounded-xl bg-[#131314] border border-white/10 px-3 py-2 text-xs text-white"
+                    className="w-full rounded-2xl neo-recessed px-3.5 py-2.5 text-xs font-bold text-slate-800"
                   >
                     <option value="Cloud Drive Sync">Cloud Drive Sync</option>
                     <option value="Subscription & Billing">Subscription & Billing</option>
                     <option value="AI Classification Issue">AI Classification Issue</option>
                     <option value="Bug Report">Bug Report</option>
                   </select>
-                </div>
-
-                <div>
-                  <label className="text-xs font-semibold text-slate-300">Describe Your Issue</label>
                   <textarea
                     rows={4}
                     required
                     value={fbMessage}
                     onChange={(e) => setFbMessage(e.target.value)}
-                    placeholder="Explain what happened so the Creator can resolve it..."
-                    className="mt-1 w-full rounded-xl bg-[#131314] border border-white/10 p-3 text-xs text-white focus:outline-none focus:border-[#8ab4f8]"
+                    placeholder="Describe your issue or request..."
+                    className="w-full rounded-2xl neo-recessed p-3.5 text-xs font-medium text-slate-900 focus:outline-none"
                   />
-                </div>
+                  <MagneticButton type="submit" className="neo-btn-active px-5 py-2.5 rounded-2xl text-xs font-extrabold">
+                    Send to Creator Support Desk
+                  </MagneticButton>
+                </form>
+              </TiltSpotlightCard>
 
-                <button
-                  type="submit"
-                  className="px-5 py-2.5 rounded-full bg-[#8ab4f8] text-slate-950 text-xs font-bold"
-                >
-                  Send to Creator Support Desk
-                </button>
-              </form>
-            </div>
-
-            <div className="p-6 rounded-2xl bg-[#1e1f20] border border-white/10 space-y-3">
-              <h3 className="text-base font-bold">My Support Tickets & Creator Responses ({feedbackList.length})</h3>
-              <p className="text-xs text-slate-400">
-                Track the status of your reported issues and read replies from the Project Creator.
-              </p>
-              <div className="space-y-3 max-h-80 overflow-y-auto pt-2 pr-1">
-                {feedbackList.length > 0 ? (
-                  feedbackList.map((fb) => (
-                    <div key={fb.id} className="p-3.5 rounded-xl bg-black/25 border border-white/10 text-xs space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[#8ab4f8] font-bold">#{fb.id} • {fb.category}</span>
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          fb.status === "Resolved"
-                            ? "bg-emerald-500/20 text-emerald-300"
-                            : "bg-amber-500/20 text-amber-300"
-                        }`}>
-                          {fb.status || "Open"}
-                        </span>
+              <TiltSpotlightCard maxTilt={6} className="rounded-3xl p-6 space-y-3 gsap-3d-item">
+                <h3 className="text-base font-extrabold text-slate-900">My Tickets & Creator Replies ({feedbackList.length})</h3>
+                <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+                  {feedbackList.map((fb) => (
+                    <div key={fb.id} className="neo-recessed p-3.5 rounded-2xl text-xs space-y-1.5">
+                      <div className="flex justify-between font-extrabold text-violet-700">
+                        <span>#{fb.id} • {fb.category}</span>
+                        <span>{fb.status || "Open"}</span>
                       </div>
-                      <p className="text-slate-200">{fb.message}</p>
-                      {fb.admin_reply ? (
-                        <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-200">
-                          <p className="text-[10px] font-bold uppercase text-emerald-400 mb-0.5">
-                            ✓ Creator Reply:
-                          </p>
-                          <p>{fb.admin_reply}</p>
+                      <p className="text-slate-800 font-medium">{fb.message}</p>
+                      {fb.admin_reply && (
+                        <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800">
+                          <strong>Creator Reply:</strong> {fb.admin_reply}
                         </div>
-                      ) : (
-                        <p className="text-[11px] text-slate-500 italic">Awaiting response from Creator...</p>
                       )}
                     </div>
-                  ))
-                ) : (
-                  <p className="text-xs text-slate-500 italic py-8 text-center">
-                    You have not submitted any support tickets yet.
-                  </p>
-                )}
-              </div>
+                  ))}
+                </div>
+              </TiltSpotlightCard>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </main>
 
-      {/* MODAL: STRICT IDENTITY-LOCKED GMAIL DRIVE LINKING */}
+      {/* MODAL: IDENTITY-LOCKED CLOUD DRIVE LINK */}
       {cloudModalOpen && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#1e1f20] border border-white/10 rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
-            <button
-              onClick={() => setCloudModalOpen(false)}
-              className="absolute right-4 top-4 text-slate-400 hover:text-white"
-            >
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <TiltSpotlightCard maxTilt={5} className="rounded-3xl w-full max-w-md p-6 relative">
+            <button onClick={() => setCloudModalOpen(false)} className="absolute right-5 top-5 text-slate-500 hover:text-slate-900">
               <X className="w-5 h-5" />
             </button>
-
-            <div className="flex items-center gap-2.5 mb-2">
-              <ShieldCheck className="w-5 h-5 text-emerald-400" />
-              <h3 className="text-base font-bold">Identity-Locked Gmail Drive Bridge</h3>
-            </div>
-            <p className="text-xs text-slate-400 mb-4">
-              For security and data isolation, SmartSorter only permits linking the Google Drive owned by your authenticated login email.
+            <h3 className="text-base font-extrabold text-slate-900 mb-2">Identity-Locked Gmail Drive Bridge</h3>
+            <p className="text-xs font-medium text-slate-600 mb-4">
+              Only the Google Drive matching your login Gmail ({currentUser.email}) can be linked.
             </p>
-
             {summary.subscription_plan === "Free" ? (
-              <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-3">
-                <p className="text-xs text-amber-200 font-semibold">
-                  🔒 Maintenance Subscription Required
-                </p>
-                <p className="text-[11px] text-slate-300 leading-relaxed">
-                  You are currently on the <strong>100 MB Free Quota</strong> ({summary.total_storage_mb} MB used). Activate <strong>Cloud Bridge Pro (₹199/mo)</strong> to bind your personal Google Drive (<code>{currentUser.email}</code>).
-                </p>
-                <button
-                  type="button"
+              <div className="neo-recessed p-4 rounded-2xl space-y-3">
+                <p className="text-xs text-pink-600 font-extrabold">🔒 Maintenance Subscription Required</p>
+                <MagneticButton
                   onClick={() => handleActivateSubscription("Cloud Bridge Pro")}
-                  className="w-full py-2.5 rounded-full bg-[#8ab4f8] text-slate-950 text-xs font-bold"
+                  className="w-full py-2.5 rounded-2xl neo-btn-active text-xs font-extrabold"
                 >
                   Activate Cloud Bridge Pro (₹199/mo) →
-                </button>
+                </MagneticButton>
               </div>
             ) : (
               <form onSubmit={handleLinkCloudDrive} className="space-y-4">
-                <div>
-                  <label className="text-xs font-semibold text-slate-300">Cloud Provider</label>
-                  <select
-                    value={cloudProviderInput}
-                    onChange={(e) => setCloudProviderInput(e.target.value)}
-                    className="mt-1 w-full rounded-xl bg-[#131314] border border-white/10 px-3 py-2.5 text-xs text-white"
-                  >
-                    <option value="Google Drive">Google Drive (Gmail Bound)</option>
-                    <option value="OneDrive">Microsoft OneDrive (Email Bound)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold text-slate-300">Authenticated Drive Account</label>
-                    <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
-                      <Lock className="w-3 h-3" /> Identity Locked
-                    </span>
-                  </div>
-                  <input
-                    type="email"
-                    readOnly
-                    disabled
-                    value={currentUser.email}
-                    className="mt-1 w-full rounded-xl bg-slate-900 border border-emerald-500/30 px-3 py-2.5 text-xs text-emerald-300 font-mono cursor-not-allowed"
-                  />
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    Cross-account linking is disabled. Only <strong>{currentUser.email}</strong> can be linked to this workspace.
-                  </p>
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full py-2.5 rounded-full bg-[#8ab4f8] hover:bg-blue-400 text-slate-950 text-xs font-bold transition"
+                <select
+                  value={cloudProviderInput}
+                  onChange={(e) => setCloudProviderInput(e.target.value)}
+                  className="w-full rounded-2xl neo-recessed px-3.5 py-2.5 text-xs font-bold text-slate-800"
                 >
+                  <option value="Google Drive">Google Drive (Gmail Bound)</option>
+                  <option value="OneDrive">Microsoft OneDrive (Email Bound)</option>
+                </select>
+                <input
+                  type="email"
+                  readOnly
+                  disabled
+                  value={currentUser.email}
+                  className="w-full rounded-2xl neo-recessed px-3.5 py-2.5 text-xs text-emerald-700 font-mono font-bold cursor-not-allowed"
+                />
+                <MagneticButton type="submit" className="w-full py-2.5 rounded-2xl neo-btn-active text-xs font-extrabold">
                   Verify Identity & Connect My Drive
-                </button>
+                </MagneticButton>
               </form>
             )}
-          </div>
+          </TiltSpotlightCard>
         </div>
       )}
 
-      {/* MODAL 1: UPLOAD DOCUMENTS */}
+      {/* MODAL: UPLOAD FILES */}
       {uploadModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#1e1f20] border border-white/10 rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
-            <button
-              onClick={() => setUploadModalOpen(false)}
-              className="absolute right-4 top-4 text-slate-400 hover:text-slate-200"
-            >
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <TiltSpotlightCard maxTilt={5} className="rounded-3xl w-full max-w-md p-6 relative">
+            <button onClick={() => setUploadModalOpen(false)} className="absolute right-5 top-5 text-slate-500 hover:text-slate-900">
               <X className="w-5 h-5" />
             </button>
-
-            <h3 className="text-base font-bold mb-1">Upload & Sort Files</h3>
-            <p className="text-xs text-slate-400 mb-4">
-              Active Storage: {quotaDisplayLabel}. Duplicate files are automatically routed to Spam.
-            </p>
-
-            <form onSubmit={handleUploadSubmit}>
-              <div className="border-2 border-dashed border-white/10 hover:border-[#8ab4f8] rounded-xl p-6 text-center cursor-pointer mb-4">
+            <h3 className="text-base font-extrabold text-slate-900 mb-1">Upload & Sort Files</h3>
+            <p className="text-xs font-medium text-slate-600 mb-4">{quotaDisplayLabel}</p>
+            <form onSubmit={handleUploadSubmit} className="space-y-4">
+              <div className="neo-recessed rounded-2xl p-6 text-center">
                 <input
                   type="file"
                   multiple
                   onChange={(e) => setSelectedFiles(Array.from(e.target.files))}
-                  className="w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-[#8ab4f8] file:text-slate-950 cursor-pointer"
+                  className="w-full text-xs text-slate-700 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-extrabold file:bg-violet-600 file:text-white cursor-pointer"
                 />
               </div>
-
-              {selectedFiles.length > 0 && (
-                <div className="mb-4 max-h-32 overflow-y-auto space-y-1">
-                  {selectedFiles.map((f, i) => (
-                    <div key={i} className="text-xs text-slate-300 flex items-center gap-2">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                      <span className="truncate">{f.name}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <button
+              <MagneticButton
                 type="submit"
                 disabled={isUploading || selectedFiles.length === 0}
-                className="w-full py-2.5 bg-[#8ab4f8] hover:bg-blue-400 disabled:bg-slate-700 text-slate-950 rounded-full text-xs font-bold transition"
+                className="w-full py-2.5 rounded-2xl neo-btn-active text-xs font-extrabold"
               >
                 {isUploading ? "Sorting & Indexing..." : `Sort ${selectedFiles.length} File(s)`}
-              </button>
+              </MagneticButton>
             </form>
-          </div>
+          </TiltSpotlightCard>
         </div>
       )}
 
-      {/* MODAL 2: SPLIT-SCREEN DOCUMENT PREVIEW + "ASK GEMINI" */}
+      {/* MODAL: SPLIT-SCREEN DOCUMENT PREVIEW + ASK GEMINI */}
       {previewDoc && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#1e1f20] border border-white/10 rounded-2xl w-full max-w-6xl h-[85vh] flex flex-col shadow-2xl overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-[#131314]">
+        <div className="fixed inset-0 bg-slate-900/45 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="neo-glass rounded-3xl w-full max-w-6xl h-[85vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
               <div className="flex items-center gap-3 overflow-hidden">
                 {getFileIcon(previewDoc.filename)}
                 <div className="overflow-hidden">
-                  <h3 className="text-sm font-bold text-white truncate">{previewDoc.filename}</h3>
-                  <p className="text-[11px] text-slate-400 truncate">{previewDoc.summary}</p>
+                  <h3 className="text-sm font-extrabold text-slate-900 truncate">{previewDoc.filename}</h3>
+                  <p className="text-[11px] text-slate-600 truncate">{previewDoc.summary}</p>
                 </div>
               </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                <select
-                  value={previewDoc.category}
-                  onChange={(e) => handleCategoryChange(previewDoc.id, e.target.value)}
-                  className="bg-[#1e1f20] border border-white/10 rounded-full px-3 py-1.5 text-xs text-[#8ab4f8] font-semibold"
-                >
-                  {allCategoryOptions.map((catOpt) => (
-                    <option key={catOpt} value={catOpt}>{catOpt}</option>
-                  ))}
-                  <option value="__NEW_CUSTOM__">+ Custom Folder...</option>
-                </select>
-
-                <button
-                  onClick={() => handleDownloadFile(previewDoc.id)}
-                  className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#8ab4f8] text-slate-950 rounded-full text-xs font-bold"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download</span>
+              <div className="flex items-center gap-2">
+                <button onClick={() => handleDownloadFile(previewDoc.id)} className="neo-btn-active px-3.5 py-1.5 rounded-xl text-xs font-extrabold">
+                  Download
                 </button>
-
-                <button
-                  onClick={() => setPreviewDoc(null)}
-                  className="p-1.5 text-slate-400 hover:text-white rounded-lg"
-                >
+                <button onClick={() => setPreviewDoc(null)} className="p-1.5 text-slate-500 hover:text-slate-900">
                   <X className="w-5 h-5" />
                 </button>
               </div>
             </div>
 
             <div className="flex-1 flex overflow-hidden">
-              <div className="flex-1 bg-black flex items-center justify-center overflow-hidden p-4">
-                {["png", "jpg", "jpeg", "webp", "gif", "svg"].includes(
-                  previewDoc.filename.split(".").pop().toLowerCase()
-                ) ? (
-                  <img
-                    src={`${API_BASE}/documents/${previewDoc.id}/file?download=false`}
-                    alt={previewDoc.filename}
-                    className="max-h-full max-w-full object-contain rounded-lg"
-                  />
+              <div className="flex-1 bg-slate-100 flex items-center justify-center p-4">
+                {["png", "jpg", "jpeg", "webp", "gif", "svg"].includes(previewDoc.filename.split(".").pop().toLowerCase()) ? (
+                  <img src={`${API_BASE}/documents/${previewDoc.id}/file?download=false`} alt={previewDoc.filename} className="max-h-full max-w-full object-contain rounded-xl shadow-md" />
                 ) : (
-                  <iframe
-                    title={previewDoc.filename}
-                    src={`${API_BASE}/documents/${previewDoc.id}/file?download=false`}
-                    className="w-full h-full rounded-lg border border-white/10 bg-white"
-                  />
+                  <iframe title={previewDoc.filename} src={`${API_BASE}/documents/${previewDoc.id}/file?download=false`} className="w-full h-full rounded-xl bg-white shadow-sm" />
                 )}
               </div>
 
-              <div className="w-80 md:w-96 border-l border-white/10 bg-[#131314] flex flex-col justify-between p-4 shrink-0">
-                <div className="pb-3 border-b border-white/10">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-[#8ab4f8]">
-                      ✨ Ask Gemini AI
-                    </h4>
-                    <button
-                      type="button"
-                      onClick={() => handleExportNotesMarkdown(previewDoc.filename, qaMessages)}
-                      className="text-[10px] px-2.5 py-1 rounded-full bg-[#1e1f20] text-slate-300 border border-white/10"
-                    >
-                      💾 Save Notes (.md)
+              <div className="w-80 md:w-96 border-l border-slate-200 flex flex-col justify-between p-4">
+                <div className="pb-3 border-b border-slate-200">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-extrabold text-violet-700">✨ Ask Gemini AI</span>
+                    <button onClick={() => handleExportNotesMarkdown(previewDoc.filename, qaMessages)} className="neo-btn px-2.5 py-1 rounded-xl text-[10px] font-bold text-slate-700">
+                      💾 Save Notes
                     </button>
                   </div>
-                  <div className="flex flex-wrap gap-1.5 mt-2.5">
-                    <button
-                      type="button"
-                      onClick={() => handleAskDocument("Summarize the key points of this document.")}
-                      className="text-[10px] px-2.5 py-1 rounded-full bg-blue-500/15 text-blue-300"
-                    >
-                      📄 Summarize
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleAskDocument("Generate 3 study quiz questions from this file.")}
-                      className="text-[10px] px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-300"
-                    >
-                      📝 Quiz Me
-                    </button>
+                  <div className="flex gap-1.5 mt-2">
+                    <button onClick={() => handleAskDocument("Summarize key points.")} className="neo-btn px-2.5 py-1 rounded-xl text-[10px] font-bold text-violet-700">📄 Summarize</button>
+                    <button onClick={() => handleAskDocument("Generate 3 quiz questions.")} className="neo-btn px-2.5 py-1 rounded-xl text-[10px] font-bold text-pink-600">📝 Quiz Me</button>
                   </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto space-y-3 py-3 pr-1">
+                <div className="flex-1 overflow-y-auto space-y-2.5 py-3">
                   {qaMessages.map((m, idx) => (
-                    <div
-                      key={idx}
-                      className={`p-3 rounded-xl text-xs whitespace-pre-wrap leading-relaxed ${
-                        m.role === "user"
-                          ? "bg-[#004a77] text-[#c2e7ff] ml-6"
-                          : "bg-[#1e1f20] border border-white/10 text-slate-200 mr-2"
-                      }`}
-                    >
+                    <div key={idx} className={`p-3 rounded-2xl text-xs whitespace-pre-wrap ${m.role === "user" ? "neo-btn-active ml-6" : "neo-recessed text-slate-800 mr-2"}`}>
                       {m.text}
                     </div>
                   ))}
-                  {qaLoading && (
-                    <div className="text-xs text-[#8ab4f8] italic animate-pulse">
-                      Gemini is analyzing document...
-                    </div>
-                  )}
                 </div>
 
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    handleAskDocument();
-                  }}
-                  className="pt-2 border-t border-white/10 flex gap-2"
-                >
+                <form onSubmit={(e) => { e.preventDefault(); handleAskDocument(); }} className="flex gap-2 pt-2">
                   <input
                     type="text"
                     value={qaQuestion}
                     onChange={(e) => setQaQuestion(e.target.value)}
                     placeholder="Ask about this file..."
-                    className="flex-1 rounded-full bg-[#1e1f20] border border-white/10 px-3.5 py-2 text-xs text-white focus:outline-none"
+                    className="flex-1 neo-recessed rounded-2xl px-3.5 py-2 text-xs text-slate-900 focus:outline-none"
                   />
-                  <button
-                    type="submit"
-                    disabled={qaLoading || !qaQuestion.trim()}
-                    className="px-4 py-2 bg-[#8ab4f8] text-slate-950 rounded-full text-xs font-bold"
-                  >
-                    Ask
-                  </button>
+                  <button type="submit" className="neo-btn-active px-4 py-2 rounded-2xl text-xs font-extrabold">Ask</button>
                 </form>
               </div>
             </div>
@@ -2960,61 +2126,34 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL 3: ASK FOLDER AI SYNTHESIS */}
+      {/* MODAL: ASK FOLDER AI */}
       {folderAiTarget && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#1e1f20] border border-purple-500/30 rounded-2xl w-full max-w-2xl h-[75vh] flex flex-col shadow-2xl overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-[#131314]">
-              <div className="flex items-center gap-2.5">
-                <Sparkles className="w-5 h-5 text-purple-400" />
-                <h3 className="text-sm font-bold text-white">Ask Folder AI — "{folderAiTarget}"</h3>
-              </div>
-              <button onClick={() => setFolderAiTarget(null)} className="text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
+        <div className="fixed inset-0 bg-slate-900/45 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="neo-glass rounded-3xl w-full max-w-2xl h-[75vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+              <h3 className="text-sm font-extrabold text-violet-700">✨ Ask Folder AI — "{folderAiTarget}"</h3>
+              <button onClick={() => setFolderAiTarget(null)}><X className="w-5 h-5 text-slate-600" /></button>
             </div>
-
             <div className="flex-1 overflow-y-auto space-y-3 p-6">
               {folderAiMessages.map((m, idx) => (
-                <div
-                  key={idx}
-                  className={`p-3.5 rounded-xl text-xs whitespace-pre-wrap leading-relaxed ${
-                    m.role === "user"
-                      ? "bg-purple-600 text-white ml-12"
-                      : "bg-[#131314] border border-white/10 text-slate-200 mr-6"
-                  }`}
-                >
+                <div key={idx} className={`p-3.5 rounded-2xl text-xs whitespace-pre-wrap ${m.role === "user" ? "neo-btn-active ml-10" : "neo-recessed text-slate-800 mr-6"}`}>
                   {m.text}
                 </div>
               ))}
             </div>
-
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleAskFolderAi();
-              }}
-              className="p-4 border-t border-white/10 bg-[#131314] flex gap-2.5"
-            >
+            <form onSubmit={(e) => { e.preventDefault(); handleAskFolderAi(); }} className="p-4 border-t border-slate-200 flex gap-2">
               <input
                 type="text"
                 value={folderAiQuestion}
                 onChange={(e) => setFolderAiQuestion(e.target.value)}
                 placeholder={`Synthesize all files in "${folderAiTarget}"...`}
-                className="flex-1 rounded-full bg-[#1e1f20] border border-white/10 px-4 py-2 text-xs text-white"
+                className="flex-1 neo-recessed rounded-2xl px-4 py-2.5 text-xs text-slate-900 focus:outline-none"
               />
-              <button
-                type="submit"
-                disabled={folderAiLoading || !folderAiQuestion.trim()}
-                className="px-4 py-2 bg-purple-600 text-white rounded-full text-xs font-bold"
-              >
-                Synthesize
-              </button>
+              <button type="submit" className="neo-btn-active px-4 py-2.5 rounded-2xl text-xs font-extrabold">Synthesize</button>
             </form>
           </div>
         </div>
       )}
-
     </div>
   );
 }

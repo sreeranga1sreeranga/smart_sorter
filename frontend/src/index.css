@@ -1,3 +1,71 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#f4f5fb] text-slate-900 antialiased selection:bg-fuchsia-500/20 selection:text-fuchsia-700 overflow-hidden;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+/* Gen Z Daylight Neomorphism + Frosted Glass Card */
+.neo-glass {
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.90), rgba(246, 247, 255, 0.78));
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  box-shadow:
+    12px 16px 34px rgba(109, 40, 217, 0.08),
+    -8px -8px 24px rgba(255, 255, 255, 0.95),
+    inset 2px 2px 4px rgba(255, 255, 255, 1),
+    inset -1px -1px 3px rgba(148, 163, 184, 0.18);
+}
+
+/* Carved Pastel Neomorphic Input Well */
+.neo-recessed {
+  background: #edf0f9;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow:
+    inset 4px 4px 8px rgba(166, 175, 204, 0.42),
+    inset -4px -4px 8px rgba(255, 255, 255, 0.95);
+}
+
+/* Tactile White Clay Pill Button */
+.neo-btn {
+  background: linear-gradient(145deg, #ffffff, #eef1fa);
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  box-shadow:
+    6px 6px 14px rgba(124, 58, 237, 0.09),
+    -4px -4px 12px rgba(255, 255, 255, 0.95),
+    inset 1px 1px 2px rgba(255, 255, 255, 1);
+}
+
+.neo-btn:hover {
+  border-color: rgba(168, 85, 247, 0.35);
+}
+
+/* Gen Z Electric Violet -> Hyper Pink Active Button */
+.neo-btn-active {
+  background: linear-gradient(135deg, #7c3aed 0%, #db2777 55%, #f97316 100%);
+  color: #ffffff !important;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow:
+    0 10px 24px -4px rgba(219, 39, 119, 0.42),
+    inset 1px 1px 2px rgba(255, 255, 255, 0.45);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(237, 240, 249, 0.6);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.28);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(219, 39, 119, 0.45);
+}
